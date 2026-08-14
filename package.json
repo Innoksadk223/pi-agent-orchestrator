@@ -1,0 +1,21 @@
+{
+  "name": "pi-agent-orchestrator",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Persistent, consent-gated Agent Team orchestration for Pi",
+  "keywords": ["pi-package", "agent-team", "multi-agent", "orchestration"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills/pi-agent-team"
+    ]
+  }
+}
