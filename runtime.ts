@@ -274,18 +274,16 @@ export interface RunTarget {
 	id: string;
 }
 
-export interface TaskInput {
-	member: MemberInput;
+interface DispatchTask {
+	member: Pick<MemberInput, "id">;
 	task: string;
-	target?: RunTarget;
+	target: RunTarget;
 }
 
 export interface ToolParams {
 	action: "plan" | "run" | "parallel" | "review" | "expert" | "wait" | "status" | "stop" | "kill" | "set-model" | "set-auto";
 	team?: string;
 	member?: MemberInput;
-	task?: string;
-	tasks?: TaskInput[];
 	plan?: PlanInput;
 	expectedRevision?: number;
 	taskId?: string;
@@ -536,7 +534,7 @@ function planConfirmation(teamId: string, plan: PreparedPlan, revision: number):
 		`Reviewer: ${plan.reviewerId}`,
 		`Roster (${roster.length}; persistent model sessions may incur cost):`,
 		...roster,
-		`Execution DAG (${tasks.length} tasks):`,
+		`Execution DAG (${allTasks.length} tasks):`,
 		...tasks,
 		`Global acceptance (${plan.acceptance.length}):`,
 		...plan.acceptance.map((item) => `- ${item.slice(0, 240)}`),
@@ -547,23 +545,14 @@ function planConfirmation(teamId: string, plan: PreparedPlan, revision: number):
 export function validateToolRequest(params: ToolParams, state: TeamState): void {
 	const teamId = params.team ?? "default";
 	if (!ID_PATTERN.test(teamId)) throw new TeamInputError(`Invalid team id: ${teamId}`);
+	if ("task" in params || "tasks" in params) {
+		throw new TeamInputError("Legacy inline member/task/tasks dispatch is no longer supported; register a plan and use taskId/taskIds.");
+	}
 	const team = state.teams[teamId];
 	const existing = team?.members ?? {};
 	const supplied = (...names: Array<keyof ToolParams>) => names.some((name) => params[name] !== undefined);
 	const forbid = (...names: Array<keyof ToolParams>) => {
 		if (supplied(...names)) throw new TeamInputError(`${params.action} forbids ${names.join("/")}.`);
-	};
-	const assertMember = (input: MemberInput | undefined) => {
-		if (!input) throw new TeamInputError(`${params.action} requires member.`);
-		if (!ID_PATTERN.test(input.id)) throw new TeamInputError(`Invalid member id: ${input.id}`);
-		if (!existing[input.id] && (!input.role || !input.instructions)) {
-			throw new TeamInputError(`New member ${teamId}/${input.id} requires role and instructions.`);
-		}
-		if (existing[input.id] && hasConfig(input)) {
-			throw new TeamInputError(
-				`Member ${teamId}/${input.id} already exists; existing members must be referenced by id only. Use plan amendment for planned roster changes.`,
-			);
-		}
 	};
 	const assertMemberIdOnly = (input: MemberInput | undefined) => {
 		if (!input) throw new TeamInputError(`${params.action} requires member.`);
@@ -571,46 +560,29 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!existing[input.id]) throw new TeamInputError(`Unknown member ${teamId}/${input.id}.`);
 		if (hasConfig(input)) throw new TeamInputError(`${params.action} accepts member id only.`);
 	};
-	const plannedFields: Array<keyof ToolParams> = [
+	const planFields: Array<keyof ToolParams> = [
 		"plan", "expectedRevision", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective",
 	];
 
 	if (params.action === "plan") {
 		if (!params.plan) throw new TeamInputError("plan requires plan.");
-		forbid("member", "task", "tasks", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "background", "timeout", "auto", "full");
+		forbid("member", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "background", "timeout", "auto", "full");
 		if (team?.plan && params.expectedRevision === undefined) throw new TeamInputError("Plan amendment requires expectedRevision.");
 		if (!team?.plan && params.expectedRevision !== undefined) throw new TeamInputError("Initial plan forbids expectedRevision.");
 		return;
 	}
 	if (params.action === "run") {
-		if (team?.plan) {
-			if (!params.taskId) throw new TeamInputError("Planned run requires taskId.");
-			forbid("member", "task", "tasks", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
-		} else {
-			assertMember(params.member);
-			if (!params.task) throw new TeamInputError("run requires task.");
-			forbid("tasks", ...plannedFields, "timeout", "auto", "full");
-		}
+		if (!team?.plan) throw new TeamInputError(`Planned run requires a registered plan for team ${teamId}.`);
+		if (!params.taskId) throw new TeamInputError("Planned run requires taskId.");
+		forbid("member", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "parallel") {
-		if (team?.plan) {
-			if (!params.taskIds || params.taskIds.length < 2 || params.taskIds.length > MAX_PARALLEL_TASKS) {
-				throw new TeamInputError(`Planned parallel requires 2-${MAX_PARALLEL_TASKS} taskIds.`);
-			}
-			forbid("member", "task", "tasks", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
-		} else {
-			if (!params.tasks || params.tasks.length < 2 || params.tasks.length > MAX_PARALLEL_TASKS) {
-				throw new TeamInputError(`parallel requires 2-${MAX_PARALLEL_TASKS} tasks.`);
-			}
-			forbid("member", "task", ...plannedFields, "timeout", "auto", "full");
-			const ids = new Set<string>();
-			for (const item of params.tasks) {
-				assertMember(item.member);
-				if (ids.has(item.member.id)) throw new TeamInputError("parallel requires distinct member ids.");
-				ids.add(item.member.id);
-			}
+		if (!team?.plan) throw new TeamInputError(`Planned parallel requires a registered plan for team ${teamId}.`);
+		if (!params.taskIds || params.taskIds.length < 2 || params.taskIds.length > MAX_PARALLEL_TASKS) {
+			throw new TeamInputError(`Planned parallel requires 2-${MAX_PARALLEL_TASKS} taskIds.`);
 		}
+		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "review") {
@@ -618,7 +590,7 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.reviewRoundId || !params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length) {
 			throw new TeamInputError(`review requires reviewRoundId and 1-${MAX_PARALLEL_TASKS} unique taskIds.`);
 		}
-		forbid("member", "task", "tasks", "taskId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "expert") {
@@ -626,17 +598,17 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.expertRoundId || !params.expertId || !params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length || !params.objective) {
 			throw new TeamInputError(`expert requires expertRoundId, expertId, 1-${MAX_PARALLEL_TASKS} unique taskIds, and objective.`);
 		}
-		forbid("member", "task", "tasks", "taskId", "reviewRoundId", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskId", "reviewRoundId", "plan", "expectedRevision", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "wait") {
 		assertMemberIdOnly(params.member);
-		forbid("task", "tasks", ...plannedFields, "background", "auto", "full");
+		forbid(...planFields, "background", "auto", "full");
 		return;
 	}
 	if (params.action === "stop" || params.action === "kill") {
 		if (params.member) assertMemberIdOnly(params.member);
-		forbid("task", "tasks", ...plannedFields, "background", "timeout", "auto", "full");
+		forbid(...planFields, "background", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "set-model") {
@@ -649,18 +621,17 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (params.member.role !== undefined || params.member.instructions !== undefined || params.member.tools !== undefined) {
 			throw new TeamInputError("set-model accepts member id, model, and optional thinking only.");
 		}
-		forbid("task", "tasks", ...plannedFields, "background", "timeout", "auto", "full");
+		forbid(...planFields, "background", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "set-auto") {
 		if (params.auto === undefined) throw new TeamInputError("set-auto requires auto: true|false.");
-		forbid("member", "task", "tasks", ...plannedFields, "background", "timeout", "full");
+		forbid("member", ...planFields, "background", "timeout", "full");
 		return;
 	}
 	if (params.action === "status") {
 		if (params.member) assertMemberIdOnly(params.member);
-		forbid("task", "tasks", ...plannedFields, "background", "timeout", "auto");
-		return;
+		forbid(...planFields, "background", "timeout", "auto");
 	}
 }
 
@@ -781,6 +752,7 @@ export type ProgressCallback = (result: {
 export interface RuntimeToolResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: ToolResultDetails;
+	terminate?: boolean;
 	usage?: {
 		input: number;
 		output: number;
@@ -1085,7 +1057,7 @@ function rosterLine(member: MemberState): string {
 
 /**
  * Format the complete roster of an approved team: member count plus one line per
- * member (stable id order). Used by explicit stop/kill and ad-hoc results.
+ * member (stable id order). Used by explicit stop/kill results.
  */
 function formatRoster(teamId: string, members: Record<string, MemberState>): string[] {
 	const all = Object.values(members)
@@ -1094,22 +1066,6 @@ function formatRoster(teamId: string, members: Record<string, MemberState>): str
 	return all.length
 		? [`Team ${teamId} has ${all.length} member${all.length === 1 ? "" : "s"}:`, ...all.map(rosterLine)]
 		: [`Team ${teamId} has no members.`];
-}
-
-function approvalMessage(team: string, config: MemberConfig): string {
-	return [
-		`Team: ${team}`,
-		`Member ID: ${config.id}`,
-		`Role: ${config.role}`,
-		`Model: ${config.model.provider}/${config.model.id}`,
-		`Thinking: ${config.thinking}`,
-		`Tools: ${config.tools.join(", ") || "all"}`,
-		"Instructions:",
-		config.instructions,
-		"",
-		"同意后，该固定配置成员会在当前父 session branch 内持久复用。后续续轮不再询问，并可能持续产生模型费用。",
-		"该成员会显示在本地只读 Web Dashboard(唯一操作:一起应用模型与思考程度);页面断线不影响 Agent。",
-	].join("\n");
 }
 
 function dashboardSpec(member: MemberState): DashboardMemberSpec {
@@ -1140,8 +1096,8 @@ export interface RunControl {
 
 export class TeamRuntime {
 	private state: TeamState;
-	// Auto-approve mode for new members (memory-only, session-scoped): set via
-	// set-auto; new sessions default back to per-member confirmation.
+	// Session-scoped authorization for initial plan and amendment USER_GATEs.
+	// It never dispatches work or records HUMAN_ACCEPT.
 	private autoApprove = false;
 	private readonly clients = new Map<string, RpcClientLike>();
 	private readonly active = new Set<string>();
@@ -1239,7 +1195,7 @@ export class TeamRuntime {
 				content: [
 					{
 						type: "text",
-						text: `Auto-approve mode ${this.autoApprove ? "ON" : "OFF"} (session-scoped; new members ${this.autoApprove ? "will be created without confirmation" : "require confirmation again"}).`,
+						text: `Automatic plan authorization ${this.autoApprove ? "ON" : "OFF"} (session-scoped; initial plans and amendments ${this.autoApprove ? "skip USER_GATE" : "require USER_GATE"}).`,
 					},
 				],
 				details: { action: "set-auto", warning: this.persistenceWarning(ctx) },
@@ -1252,84 +1208,50 @@ export class TeamRuntime {
 			return this.waitResult(teamId, (params.member as MemberInput).id, params.timeout, ctx, signal);
 		}
 		const detached = params.background !== false;
-		const planned = this.state.teams[teamId]?.plan;
-		let activatePlanned: (() => void) | undefined;
-		let tasks: TaskInput[];
-		if (planned) {
-			const dispatch = params.action === "run" || params.action === "parallel"
-				? this.preflightExecutionDispatch(teamId, params.action === "run" ? [params.taskId as string] : params.taskIds as string[], ctx)
-				: params.action === "review"
-					? this.preflightReviewDispatch(teamId, params.reviewRoundId as string, params.taskIds as string[], ctx)
-					: this.preflightExpertDispatch(
-						teamId,
-						params.expertRoundId as string,
-						params.expertId as string,
-						params.taskIds as string[],
-						params.objective as string,
-						ctx,
-					);
-			tasks = dispatch.tasks;
-			activatePlanned = dispatch.activate;
-		} else {
-			tasks = params.action === "run"
-				? [{ member: params.member as MemberInput, task: params.task as string }]
-				: (params.tasks as TaskInput[]);
-		}
-		const newConfigs = new Map<string, MemberConfig>();
-		const modelFallbacks: string[] = [];
-		for (const item of tasks) {
-			if (!this.state.teams[teamId]?.members[item.member.id]) {
-				const config = normalizeNewMember(item.member, ctx);
-				newConfigs.set(item.member.id, config);
-				// 显式请求的模型不可用→静默回退父模型;派工结果文本显式警告(决策 8)
-				if (item.member.model) {
-					const requested = parseModel(item.member.model, ctx.model);
-					if (config.model.provider !== requested.provider || config.model.id !== requested.id) {
-						modelFallbacks.push(
-							`${teamId}/${config.id}: requested model "${item.member.model}" is not in the main Pi's available models; fell back to ${config.model.provider}/${config.model.id}.`,
-						);
-					}
-				}
-			}
-		}
-
-		if (newConfigs.size > 0 && !this.autoApprove) {
-			if (!ctx.hasUI) {
-				return this.cancelledResult(
-					params.action,
-					"Creating a member requires TUI/RPC confirmation (or enable auto mode with agent_team {action:\"set-auto\", auto:true}).",
+		const dispatch = params.action === "run" || params.action === "parallel"
+			? this.preflightExecutionDispatch(teamId, params.action === "run" ? [params.taskId as string] : params.taskIds as string[], ctx)
+			: params.action === "review"
+				? this.preflightReviewDispatch(teamId, params.reviewRoundId as string, params.taskIds as string[], ctx)
+				: this.preflightExpertDispatch(
+					teamId,
+					params.expertRoundId as string,
+					params.expertId as string,
+					params.taskIds as string[],
+					params.objective as string,
+					ctx,
 				);
-			}
-			for (const config of newConfigs.values()) {
-				const approved = await ctx.confirm("Authorize persistent Agent", approvalMessage(teamId, config), {
-					signal,
-					timeout: 120_000,
-				});
-				if (!approved) return this.cancelledResult(params.action, `User declined ${teamId}/${config.id}.`);
-			}
-		}
-		// autoApprove 开启时跳过确认;派工结果通过 extraWarnings 注明(见 execute 末尾)
+		const tasks = dispatch.tasks;
 
 		this.lastCompatibility = await this.compatibility.ensureCompatible(ctx.cwd, ctx.capabilities);
-
-		if (newConfigs.size > 0) {
-			for (const config of newConfigs.values()) {
-				const before = this.getState();
-				const team = (this.state.teams[teamId] ??= emptyTeam(teamId));
-				team.members[config.id] = createApprovedMember(teamId, config, this.now(), this.uuid());
-				try {
-					this.persist(ctx);
-				} catch (error) {
-					this.state = before;
-					throw error;
-				}
-			}
-		}
-
-		const workspace = await this.ensureWorkspace(teamId, tasks, ctx);
+		const workspace = await this.writePlanWorkspace(teamId, ctx);
 		const views = await this.prepareDashboard(teamId, tasks, ctx);
-		activatePlanned?.();
-		if (activatePlanned) await this.writePlanWorkspace(teamId, ctx);
+		const preparedKeys: string[] = [];
+		try {
+			const prepared = await Promise.allSettled(tasks.map(async (task) => {
+				const member = this.state.teams[teamId].members[task.member.id];
+				await this.ensureClient(member, ctx);
+				preparedKeys.push(memberKey(teamId, member.id));
+			}));
+			const failure = prepared.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
+		} catch (error) {
+			await Promise.allSettled(preparedKeys.map(async (key) => {
+				await this.clients.get(key)?.stop();
+				this.clients.delete(key);
+			}));
+			throw error;
+		}
+		const beforeActivation = this.getState();
+		try {
+			dispatch.activate();
+		} catch (error) {
+			this.state = beforeActivation;
+			await Promise.allSettled(preparedKeys.map(async (key) => {
+				await this.clients.get(key)?.stop();
+				this.clients.delete(key);
+			}));
+			throw error;
+		}
 		const results =
 			params.action === "run"
 				? [
@@ -1345,11 +1267,16 @@ export class TeamRuntime {
 						),
 				  ]
 				: await this.runParallel(teamId, tasks, ctx, workspace, views, signal, onUpdate, detached);
-		const autoWarnings =
-			this.autoApprove && newConfigs.size > 0
-				? [`auto-approve mode is ON: ${newConfigs.size} new member(s) created without confirmation`]
-				: [];
-		return this.resultsResponse(params.action, results, ctx, modelFallbacks.concat(autoWarnings));
+		const response = this.resultsResponse(params.action, results, ctx);
+		if (
+			detached &&
+			["run", "parallel", "review", "expert"].includes(params.action) &&
+			results.length > 0 &&
+			results.every((result) => result.status === "RUNNING")
+		) {
+			response.terminate = true;
+		}
+		return response;
 	}
 
 	private assertPlannedMemberAvailable(team: TeamRecord, memberId: string): MemberState {
@@ -1366,7 +1293,7 @@ export class TeamRuntime {
 		teamId: string,
 		taskIds: string[],
 		ctx: RuntimeContext,
-	): { tasks: TaskInput[]; activate: () => void } {
+	): { tasks: DispatchTask[]; activate: () => void } {
 		const team = this.state.teams[teamId];
 		if (!team?.plan) throw new TeamInputError(`Team ${teamId} has no registered plan.`);
 		const selected = taskIds.map((id) => {
@@ -1404,7 +1331,7 @@ export class TeamRuntime {
 			}
 		}
 		const packets = new Map<string, TaskPacket>();
-		const tasks = selected.map((task): TaskInput => {
+		const tasks = selected.map((task): DispatchTask => {
 			const dependencySummaries = Object.fromEntries(task.dependsOn.map((id) => [id, team.executionTasks[id].lastSummary ?? "Verified dependency; no summary recorded."]));
 			const packet = { ...task.packet, dependencySummaries };
 			packets.set(task.id, packet);
@@ -1436,7 +1363,7 @@ export class TeamRuntime {
 		roundId: string,
 		taskIds: string[],
 		ctx: RuntimeContext,
-	): { tasks: TaskInput[]; activate: () => void } {
+	): { tasks: DispatchTask[]; activate: () => void } {
 		const team = this.state.teams[teamId];
 		if (!team?.plan) throw new TeamInputError(`Team ${teamId} has no registered plan.`);
 		if (team.reviewRounds[roundId]) throw new TeamInputError(`ReviewRound ${roundId} already exists; use a new round id.`);
@@ -1448,6 +1375,11 @@ export class TeamRuntime {
 			if (task.status !== "SUBMITTED") throw new TeamInputError(`Review target ${id} must be SUBMITTED, got ${task.status}.`);
 			return task;
 		});
+		const finalAcceptance = Object.values(team.executionTasks).every(
+			(task) => taskIds.includes(task.id) || task.status === "VERIFIED" || task.status === "CANCELED",
+		)
+			? team.plan.acceptance
+			: undefined;
 		const prompt = [
 			`Review planned tasks in ReviewRound ${roundId}. You are the only role authorized to decide VERIFIED or FIX_REQUIRED. Do not modify deliverables.`,
 			JSON.stringify({
@@ -1458,6 +1390,7 @@ export class TeamRuntime {
 					packet: task.packet,
 					submission: { summary: task.lastSummary, evidence: task.lastEvidence, outputPath: task.outputPath },
 				})),
+				...(finalAcceptance ? { globalAcceptance: finalAcceptance } : {}),
 			}, null, 2),
 			'End with one single-line JSON object: {"agent_team_report":{"type":"review","reviewRoundId":"<id>","summary":"...","evidence":["..."],"requests":[],"decisions":[{"taskId":"<id>","verdict":"VERIFIED|FIX_REQUIRED","fix_prompt":"required only for FIX_REQUIRED"}]}}',
 		].join("\n\n");
@@ -1488,7 +1421,7 @@ export class TeamRuntime {
 		taskIds: string[],
 		objective: string,
 		ctx: RuntimeContext,
-	): { tasks: TaskInput[]; activate: () => void } {
+	): { tasks: DispatchTask[]; activate: () => void } {
 		const team = this.state.teams[teamId];
 		if (!team?.plan) throw new TeamInputError(`Team ${teamId} has no registered plan.`);
 		if (team.expertRounds[roundId]) throw new TeamInputError(`ExpertRound ${roundId} already exists; use a new round id.`);
@@ -1742,15 +1675,17 @@ export class TeamRuntime {
 				}
 			}
 		}
-		if (!ctx.hasUI) return this.cancelledResult("plan", "Plan registration/amendment requires a TUI/RPC USER_GATE confirmation.");
 		const revision = (currentRevision ?? 0) + 1;
-		const approved = await ctx.confirm(
-			currentRevision === undefined ? "Register Agent Team plan" : "Amend Agent Team plan",
-			planConfirmation(teamId, prepared, revision),
-			{ signal, timeout: 120_000 },
-		);
-		if (!approved) return this.cancelledResult("plan", `User declined plan revision ${revision} for ${teamId}.`);
-		// Re-check the live revision after the asynchronous USER_GATE. A stale or
+		if (!this.autoApprove) {
+			if (!ctx.hasUI) return this.cancelledResult("plan", "Plan registration/amendment requires a TUI/RPC USER_GATE confirmation or session-scoped set-auto authorization.");
+			const approved = await ctx.confirm(
+				currentRevision === undefined ? "Register Agent Team plan" : "Amend Agent Team plan",
+				planConfirmation(teamId, prepared, revision),
+				{ signal, timeout: 120_000 },
+			);
+			if (!approved) return this.cancelledResult("plan", `User declined plan revision ${revision} for ${teamId}.`);
+		}
+		// Re-check the live revision after a possible asynchronous USER_GATE. A stale or
 		// concurrent amendment must fail closed before UUID allocation or persistence.
 		if (this.state.teams[teamId]?.plan?.revision !== currentRevision) {
 			throw new TeamInputError(`Plan revision changed during confirmation; retry from current status.`);
@@ -1910,35 +1845,6 @@ export class TeamRuntime {
 		return dir;
 	}
 
-	private async ensureWorkspace(teamId: string, _tasks: TaskInput[], ctx: RuntimeContext): Promise<string> {
-		const team = this.state.teams[teamId];
-		if (team?.plan) return this.writePlanWorkspace(teamId, ctx);
-		const dir = join(ctx.cwd, ".pi", "agent-team", teamId);
-		await mkdir(join(dir, "leader"), { recursive: true });
-		await this.ensurePlanFile(teamId, dir);
-		for (const member of Object.values(team?.members ?? {})) await this.ensureMemberIdentity(member, dir);
-		return dir;
-	}
-
-	private async ensurePlanFile(teamId: string, dir: string): Promise<void> {
-		const planPath = join(dir, "leader", "plan.md");
-		try {
-			await readFile(planPath, "utf8");
-			return;
-		} catch {
-			// First ad-hoc run only. Existing legacy workspace files are never deleted.
-		}
-		const template = [
-			`# Agent Team Plan: ${teamId}`,
-			"",
-			"- Mode: ad-hoc (no registered runtime plan)",
-			"- Source of truth: runtime TeamState",
-			"- Leader manually dispatches every member run.",
-			"",
-		].join("\n");
-		await writeFile(planPath, template, "utf8");
-	}
-
 	private async ensureMemberIdentity(member: MemberState, dir: string): Promise<void> {
 		const identityDir = join(dir, "members", member.id);
 		const identityPath = join(identityDir, "identity.md");
@@ -1968,22 +1874,6 @@ export class TeamRuntime {
 	}
 
 
-	private async readMemberInstructions(member: MemberState, workspace: string): Promise<string> {
-		// A registered plan fixes member configuration in TeamState. Legacy ad-hoc
-		// teams retain the historical leader-editable identity behavior.
-		if (this.state.teams[member.team]?.plan) return member.instructions;
-		try {
-			const content = await readFile(join(workspace, "members", member.id, "identity.md"), "utf8");
-			const marker = "## Instructions";
-			const index = content.indexOf(marker);
-			const body = (index >= 0 ? content.slice(index + marker.length) : content).trim();
-			if (body) return body;
-		} catch {
-			// identity.md 缺失(旧成员):回退 TeamState 授权快照(决策 3)
-		}
-		return member.instructions;
-	}
-
 	private async writeMemberOutput(member: MemberState, output: string, workspace: string): Promise<string | undefined> {
 		const dir = join(workspace, "members", member.id);
 		const path = join(dir, "output.md");
@@ -2006,7 +1896,7 @@ export class TeamRuntime {
 
 	private async prepareDashboard(
 		teamId: string,
-		tasks: TaskInput[],
+		tasks: DispatchTask[],
 		ctx: RuntimeContext,
 	): Promise<Map<string, DashboardMemberHandle>> {
 		// TUI always prepares the dashboard; UI-capable RPC (e.g. AionUI) prepares it too.
@@ -2025,7 +1915,7 @@ export class TeamRuntime {
 
 	private async runParallel(
 		teamId: string,
-		tasks: TaskInput[],
+		tasks: DispatchTask[],
 		ctx: RuntimeContext,
 		workspace: string,
 		views: Map<string, DashboardMemberHandle>,
@@ -2035,39 +1925,78 @@ export class TeamRuntime {
 	): Promise<MemberRunResult[]> {
 		const results = new Array<MemberRunResult>(tasks.length);
 		let next = 0;
+		let failed = false;
+		let failureReason: unknown;
+		let rollback: Promise<PromiseSettledResult<RuntimeToolResult>[]> | undefined;
+		let cohort: { pending: number; promise: Promise<void>; release: () => void } | undefined;
+		const markFailed = (error: unknown) => {
+			if (failed) return;
+			failed = true;
+			failureReason = error;
+			rollback = Promise.allSettled(tasks.map((task) => this.stopResult(teamId, task.member.id, ctx)));
+		};
 		const worker = async () => {
-			while (true) {
+			while (!failed) {
 				const index = next++;
 				if (index >= tasks.length) return;
-				results[index] = await this.runMember(
-					teamId,
-					tasks[index],
-					ctx,
-					workspace,
-					views.get(memberKey(teamId, tasks[index].member.id)),
-					signal,
-					onUpdate,
-					detached,
-				);
+				if (!cohort || cohort.pending === 0) {
+					let release: () => void = () => undefined;
+					const promise = new Promise<void>((resolve) => {
+						release = resolve;
+					});
+					cohort = { pending: 0, promise, release };
+				}
+				const current = cohort;
+				current.pending++;
+				let promptReported = false;
+				const promptSettled = async (accepted: boolean, error?: unknown) => {
+					if (promptReported) return;
+					promptReported = true;
+					if (!accepted) markFailed(error);
+					current.pending--;
+					if (current.pending === 0) current.release();
+					await current.promise;
+				};
+				try {
+					results[index] = await this.runMember(
+						teamId,
+						tasks[index],
+						ctx,
+						workspace,
+						views.get(memberKey(teamId, tasks[index].member.id)),
+						signal,
+						onUpdate,
+						detached,
+						promptSettled,
+					);
+				} catch (error) {
+					await promptSettled(false, error);
+					markFailed(error);
+					throw error;
+				}
 			}
 		};
-		const settled = await Promise.allSettled(
-			Array.from({ length: Math.min(MAX_CONCURRENCY, tasks.length) }, worker),
-		);
-		const failure = settled.find((result) => result.status === "rejected");
-		if (failure?.status === "rejected") throw failure.reason;
+		await Promise.allSettled(Array.from({ length: Math.min(MAX_CONCURRENCY, tasks.length) }, worker));
+		if (failed) {
+			await rollback;
+			const reason = `Parallel dispatch failed; prompt not replayed: ${failureReason instanceof Error ? failureReason.message : String(failureReason)}`;
+			for (const task of tasks) if (task.target) this.interruptPlannedTarget(task.target, false, reason);
+			this.persist(ctx);
+			throw failureReason;
+		}
 		return results;
 	}
 
 	private async runMember(
 		teamId: string,
-		item: TaskInput,
+		item: DispatchTask,
 		ctx: RuntimeContext,
 		workspace: string,
 		view?: DashboardMemberHandle,
 		signal?: AbortSignal,
 		onUpdate?: ProgressCallback,
 		detached = false,
+		onPromptSettled?: (accepted: boolean, error?: unknown) => Promise<void>,
 	): Promise<MemberRunResult> {
 		const member = this.state.teams[teamId]?.members[item.member.id];
 		if (!member) throw new TeamInputError(`Unknown member ${teamId}/${item.member.id}.`);
@@ -2148,7 +2077,7 @@ export class TeamRuntime {
 				abortListener = () => runControl.stop();
 				signal.addEventListener("abort", abortListener, { once: true });
 			}
-			client = await this.ensureClient(member, ctx, workspace);
+			client = await this.ensureClient(member, ctx);
 			// A kill/shutdown that raced ensureClient marks the member STOPPED; abort
 			// this run before it sends a prompt or rewrites the terminal status.
 			if ((member.status as MemberStatus) === "STOPPED") {
@@ -2204,6 +2133,7 @@ export class TeamRuntime {
 			}
 			await client.prompt(item.task);
 			accepted = true;
+			await onPromptSettled?.(true);
 			// A kill racing prompt acceptance marks the member STOPPED; never let this
 			// run proceed (no settle wait, no replay) once the kill is visible.
 			if ((member.status as MemberStatus) === "STOPPED") {
@@ -2280,6 +2210,7 @@ export class TeamRuntime {
 			await settleWait.promise;
 			return finish();
 		} catch (error) {
+			await onPromptSettled?.(false, error);
 			// A kill racing this run marks the member STOPPED; never overwrite that
 			// terminal status with INTERRUPTED/ERROR, and never replay the prompt.
 			// ensureClient failure already marks the member ERROR and persists; keep
@@ -2533,7 +2464,7 @@ export class TeamRuntime {
 		}
 	}
 
-	private async ensureClient(member: MemberState, ctx: RuntimeContext, workspace: string): Promise<RpcClientLike> {
+	private async ensureClient(member: MemberState, ctx: RuntimeContext): Promise<RpcClientLike> {
 		const key = memberKey(member.team, member.id);
 		const current = this.clients.get(key);
 		if (current) return current;
@@ -2545,10 +2476,9 @@ export class TeamRuntime {
 		try {
 			handle = await this.compatibility.createMemberClient({
 				...member,
-				instructions: await this.readMemberInstructions(member, workspace),
+				instructions: member.instructions,
 				cwd: ctx.cwd,
 				trusted: ctx.trusted,
-				workspace,
 			});
 			await handle.client.start();
 			// 成员启动时启用 Pi 原生 auto-compaction；orchestrator 不设自定义阈值，
@@ -2944,7 +2874,7 @@ export class TeamRuntime {
 			requests: team?.pendingRequests ?? [],
 		};
 		const lines = [
-			`Team ${teamId}: members=${Object.keys(members).length}${summary.planRevision ? ` planRevision=${summary.planRevision}` : " unplanned"}`,
+			`Team ${teamId}: members=${Object.keys(members).length}${summary.planRevision ? ` planRevision=${summary.planRevision}` : " legacy-state (dispatch disabled)"}`,
 			`Member counts: ${Object.entries(memberCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
 			`Task counts: ${Object.entries(summary.taskCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
 			...current.map((item) => `Current ${item.type}/${item.id}: ${item.status} member=${item.memberId}`),
@@ -2958,7 +2888,7 @@ export class TeamRuntime {
 			const view = dashboard.members[`${member.team}/${member.id}`];
 			lines.push(`${rosterLine(member)} viewer=${view.visibility}${member.contextNote ? ` context=${member.contextNote}` : ""}`);
 		}
-		if (this.autoApprove) lines.push("Auto-approve mode: ON (session-scoped)");
+		if (this.autoApprove) lines.push("Automatic plan authorization: ON (session-scoped; USER_GATE skipped, dispatch remains explicit)");
 		if (this.readOnlyError) lines.push(`STATE ERROR: ${this.readOnlyError}`);
 		if (this.lastCompatibility) lines.push(`Pi compatibility: ${this.lastCompatibility.code}`);
 		const warning = this.persistenceWarning(ctx);

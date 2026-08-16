@@ -69,7 +69,6 @@ export interface PersistentMemberOptions {
 	tools: string[];
 	cwd: string;
 	trusted: boolean;
-	workspace: string;
 }
 
 export interface MemberClientHandle {
@@ -319,13 +318,9 @@ export class PiCompatibilityAdapter {
 			"Fixed instructions:",
 			member.instructions,
 			"",
-			"Team collaboration:",
-			`- Shared workspace: ${member.workspace}`,
-			"- The leader owns leader/plan.md (the team contract) and brief.md (goals, division of labor, file boundaries); read and follow them, never edit them.",
-			`- Write only inside your own members/${member.id}/ and notes/<your-id>.md; read leader/plan.md, brief.md, and other members' members/<peer-id>/output.md — never another member's identity.md. Your identity is members/${member.id}/identity.md (generated at authorization; leader-editable, effective next run).`,
-			"- Talk to peers through notes/: read notes/<peer-id>.md; write your own notes/<your-id>.md. Do not modify a peer's notes file in the same round; the leader relays replies between rounds.",
-			`- Your final assistant message is your report to the leader; long output is saved to members/${member.id}/output.md (time/status/model header).`,
-			"- Do not create or coordinate other agents; the leader coordinates.",
+			"Follow only the current runtime dispatch and its local TaskPacket or review/expert targets.",
+			"Do not consult legacy team files, other members, the parent roster, global plan, or parent conversation history.",
+			"Do not create or coordinate agents and do not use agent_team; the leader alone dispatches work.",
 		].join("\n");
 		await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
 		const cleanupPrompt = async () => {

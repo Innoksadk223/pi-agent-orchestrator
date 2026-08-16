@@ -2,7 +2,7 @@
 
 `agent_team` 是主 Pi 的轻量协作控制面。主 Pi 始终是唯一 Leader；runtime 只持久化事实、传递 settled 结果，并执行成员授权、DAG 依赖、成员忙闲和 owned-path 冲突约束。它不自动选专家、创建任务或派发下一节点。
 
-## Plan-first Loop
+## Planned-only Loop
 
 复杂任务先一次注册完整计划：
 
@@ -32,7 +32,9 @@ agent_team({
 })
 ```
 
-一次 USER_GATE 同时确认 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、TaskPacket 和 acceptance。拒绝、取消或超时不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child。
+一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`set-auto` 默认关闭；关闭时 initial plan 和 amendment 使用同一有界 TUI/RPC USER_GATE，拒绝、取消或超时不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child。启用后只在当前 runtime/session 跳过这两个 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
+
+TUI 中该确认使用有界审阅视窗：`Yes` / `No` 固定可见，`↑` / `↓` 切换选项，`PageUp` / `PageDown` 滚动正文，`Enter` 确认，`Esc` / `Ctrl+C` 取消；用户自定义的 Pi select 键位同样生效。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
 
 已有计划用同一动作 amendment，并要求实时 revision 精确匹配：
 
@@ -40,7 +42,7 @@ agent_team({
 agent_team({ action: "plan", team: "default", expectedRevision: 1, plan: nextPlan })
 ```
 
-计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
+计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证，并在 auto 关闭时重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
 
 ## 手动推进
 
@@ -54,7 +56,7 @@ agent_team({ action: "expert", expertRoundId: "opt-1", expertId: "optimizer", ta
 agent_team({ action: "set-model", member: { id: "coder", model: "provider/model", thinking: "high" } })
 ```
 
-计划任务派发前会重新读取 TeamState，并在任何 workspace、Dashboard、client 或 prompt 副作用前完成 preflight：
+计划派工先对整批完成 schema、revision、DAG、成员可用性、owned-path 与冲突 preflight；随后创建 workspace、准备 Dashboard 并启动整批 client，最后才激活并发送 prompt。Dashboard 或 client 启动失败不会发送任何 prompt；parallel prompt 任一失败会中断同批其余 attempt 并等待它们离开 `RUNNING`。默认后台 `run` / `parallel` / `review` / `expert` 成功接受任务后，会结束 Leader 当前自动工具回合并立即恢复主 Pi 输入；成员继续在后台运行，settled 后仍通过既有 `followUp + triggerTurn` 异步回报。显式 `background:false` 保持前台等待行为。
 
 - task 状态允许新 attempt；所有 `dependsOn` 均为 `VERIFIED`；
 - owner 已授权且空闲；parallel 中成员互异；
@@ -62,7 +64,7 @@ agent_team({ action: "set-model", member: { id: "coder", model: "provider/model"
 - 路径相等或存在父子前缀即冲突；从 `RUNNING` 到 `VERIFIED/CANCELED` 持锁；
 - ReviewRound 只接收 `SUBMITTED`；optimizer 只附着 `VERIFIED`；专家不取写锁。
 
-未注册 plan 的旧 team 仍可使用 ad-hoc `run/parallel`。一旦注册计划，执行必须使用 task/review/expert 标识，不能以 ad-hoc payload 绕过范围。
+所有新派工都要求已注册 plan。旧 TeamState/成员/Session 仍可通过 `status`、`wait`、`stop`、`kill`、`set-model` 和恢复路径读取使用，但 inline `member + task`、inline `tasks[]` 以及无计划 `run/parallel` 会明确拒绝；runtime 不删除或覆盖旧 workspace 与 Session。
 
 ## 结构化 settled 报告
 
@@ -104,10 +106,12 @@ Coder 只能令任务进入 `SUBMITTED/BLOCKED/REPORT_INVALID`。只有计划指
 
 ## 最小 Workspace
 
-新代码只维护：
+每个 Coder dispatch 只携带当前任务的 objective、constraints、dependency summaries、ownedPaths、局部 acceptance/relevantPaths、output contract 与必要的原样 `fix_prompt`。普通 task review/expert 同样只收到目标任务局部事实；只有覆盖全部尚未最终处理任务的 final review 才附带全局 acceptance。runtime 不自动复制 roster、全局 plan、父会话历史或旧 `brief/roster/notes/peer output`。
+
+Workspace 只维护：
 
 - `leader/plan.md`：TeamState 的精简恢复视图；
-- `members/<id>/identity.md`：首次授权生成，既有内容不覆盖；
+- `members/<id>/identity.md`：plan 首次注册生成，既有文件不覆盖也不作为新派工配置来源；
 - `members/<id>/output.md`：仅超长输出。
 
 不再创建、同步或读取旧 `brief.md`、`leader/roster.md`、`notes/`。已有旧文件和用户过程文件不会被删除。

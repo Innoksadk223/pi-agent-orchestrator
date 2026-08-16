@@ -30,13 +30,6 @@ const Member = Type.Object(
 	},
 	{ additionalProperties: false },
 );
-const Task = Type.Object(
-	{
-		member: Member,
-		task: Type.String({ minLength: 1, maxLength: 50_000 }),
-	},
-	{ additionalProperties: false },
-);
 const PlanMember = Type.Object(
 	{
 		id: Id,
@@ -78,8 +71,6 @@ export const AgentTeamParams = Type.Object(
 		action: StringEnum(["plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "set-model", "set-auto"] as const),
 		team: Type.Optional(Id),
 		member: Type.Optional(Member),
-		task: Type.Optional(Type.String({ minLength: 1, maxLength: 50_000 })),
-		tasks: Type.Optional(Type.Array(Task, { minItems: 2, maxItems: MAX_PARALLEL_TASKS })),
 		plan: Type.Optional(Plan),
 		expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 		taskId: Type.Optional(Id),
@@ -97,8 +88,8 @@ export const AgentTeamParams = Type.Object(
 		background: Type.Optional(Type.Boolean()),
 		// wait: maximum milliseconds to wait for the member to settle (clamped to 1s-24h).
 		timeout: Type.Optional(Type.Integer({ minimum: 1 })),
-		// set-auto: session-scoped auto-approval toggle for new members (memory-only;
-		// new sessions default back to per-member confirmation).
+		// set-auto: session-scoped USER_GATE authorization for plan registration
+		// and amendments (memory-only; new sessions default to confirmation).
 		auto: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
