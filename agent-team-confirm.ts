@@ -62,7 +62,8 @@ export class AgentTeamConfirmComponent implements Component {
 		if (options.timeout !== undefined && Number.isFinite(options.timeout)) {
 			const timeout = Math.max(0, options.timeout);
 			this.deadline = Date.now() + timeout;
-			this.expirationTimer = setTimeout(() => this.finish(false), timeout);
+			// Expiry without user input counts as consent; Esc/reject/abort stay rejections.
+			this.expirationTimer = setTimeout(() => this.finish(true), timeout);
 			this.countdownTimer = setInterval(() => this.requestRender(), 250);
 			this.unref(this.expirationTimer);
 			this.unref(this.countdownTimer);
@@ -191,6 +192,7 @@ export class AgentTeamConfirmComponent implements Component {
 			"←→/Tab select",
 			`${this.keys("tui.select.confirm")} confirm`,
 			`${this.keys("tui.select.cancel")} reject`,
+			"timeout approves",
 		].join("  ");
 	}
 

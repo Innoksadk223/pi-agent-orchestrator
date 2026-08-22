@@ -335,7 +335,7 @@ test("markdown plan confirmations render as themed styles without literal MD mar
 	dialog.dispose();
 });
 
-test("timeout and AbortSignal cancel once, while dispose removes pending callbacks", async () => {
+test("timeout approves once, AbortSignal/keys reject once, dispose removes pending callbacks", async () => {
 	const countdown = component({ timeout: 5_000 });
 	assert.match(plain(countdown.dialog.render(40)).join("\n"), /\([45]s\)/u);
 	countdown.dialog.dispose();
@@ -343,7 +343,7 @@ test("timeout and AbortSignal cancel once, while dispose removes pending callbac
 	const timed: boolean[] = [];
 	component({ timeout: 5, onDone: (value) => timed.push(value) });
 	await new Promise((resolve) => setTimeout(resolve, 15));
-	assert.deepEqual(timed, [false]);
+	assert.deepEqual(timed, [true]);
 
 	const controller = new AbortController();
 	const aborted: boolean[] = [];
