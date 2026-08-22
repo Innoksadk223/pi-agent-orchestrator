@@ -89,7 +89,7 @@ export const AgentTeamParams = Type.Object(
 		// wait: maximum milliseconds to wait for the member to settle (clamped to 1s-24h).
 		timeout: Type.Optional(Type.Integer({ minimum: 1 })),
 		// set-auto: session-scoped USER_GATE authorization for plan registration
-		// and amendments (memory-only; new sessions default to confirmation).
+		// and roster growth (memory-only; new sessions default to confirmation).
 		auto: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },

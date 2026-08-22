@@ -115,11 +115,15 @@ class FakeClient implements RpcClientLike {
 	roundOutputs?: string[];
 	private idleBlocked = false;
 	private turns = 0;
+	readonly order: string[];
 
-	constructor(
-		readonly sessionId: string,
-		private readonly order: string[] = [],
-	) {}
+	readonly sessionId: string;
+	readonly order: string[];
+
+	constructor(sessionId: string, order: string[] = []) {
+		this.sessionId = sessionId;
+		this.order = order;
+	}
 
 	async start(): Promise<void> {
 		this.startCalls++;
@@ -216,7 +220,11 @@ class FakeCompatibility implements CompatibilityPort {
 	ignoreModelUpdates = false;
 	ignoreThinkingUpdates = false;
 
-	constructor(private readonly order: string[] = []) {}
+	readonly order: string[];
+
+	constructor(order: string[] = []) {
+		this.order = order;
+	}
 
 	async featureCheck(): Promise<any> {
 		return { ok: true, code: "COMPATIBLE", message: "ok", doctorRequired: false };
@@ -281,7 +289,11 @@ class FakeDashboard implements TeamDashboard {
 	views = new Map<string, FakeView>();
 	failPrepare?: Error;
 
-	constructor(private readonly order: string[] = []) {}
+	readonly order: string[];
+
+	constructor(order: string[] = []) {
+		this.order = order;
+	}
 
 	async prepare(members: readonly DashboardMemberSpec[]): Promise<Map<string, DashboardMemberHandle>> {
 		this.prepareCalls.push([...members]);
@@ -891,20 +903,30 @@ test("set-auto authorizes only plan gates for the current runtime session", asyn
 	await runtime.execute({ action: "set-auto", auto: false }, headless);
 	const next = structuredClone(amended);
 	next.acceptance.push("Human acceptance remains external.");
+	// Same-roster amendment: re-dispatching existing members needs no fresh consent.
+	const silent = context({ mode: "rpc", hasUI: true, confirm: async () => { confirmations++; return true; } });
+	await runtime.execute({ action: "plan", expectedRevision: 2, plan: next }, silent);
+	assert.equal(confirmations, 0, "same-roster amendments skip the USER_GATE");
+	// Roster growth (new member) still requires explicit consent with auto off.
+	const grown = structuredClone(next);
+	grown.members.push({ id: "auditor", kind: "reviewer", role: "Audit only.", instructions: "Read-only audit.", tools: ["read"] });
 	const gated = context({ mode: "rpc", hasUI: true, confirm: async () => { confirmations++; return true; } });
-	await runtime.execute({ action: "plan", expectedRevision: 2, plan: next }, gated);
-	assert.equal(confirmations, 1, "auto off restores the bounded/native plan confirmation path");
+	await runtime.execute({ action: "plan", expectedRevision: 3, plan: grown }, gated);
+	assert.equal(confirmations, 1, "roster growth keeps its USER_GATE with auto off");
 
 	const restored = new TeamRuntime(new FakeCompatibility(), () => NOW, () => "unused", () => new FakeDashboard());
 	restored.restoreFromBranch([{ type: "custom", customType: STATE_ENTRY_TYPE, data: runtime.getState() }]);
 	const status = await restored.execute({ action: "status" }, context({ mode: "json", hasUI: false }));
 	assert.doesNotMatch(status.content[0].text, /Automatic plan authorization: ON/u);
+	// Authorization never persists; a further roster growth without set-auto is refused headlessly.
+	const grownPlus = structuredClone(grown);
+	grownPlus.members.push({ id: "auditor2", kind: "reviewer", role: "Second audit.", instructions: "Read-only audit.", tools: ["read"] });
 	const noGate = await restored.execute(
-		{ action: "plan", expectedRevision: 3, plan: next },
+		{ action: "plan", expectedRevision: 4, plan: grownPlus },
 		context({ mode: "json", hasUI: false }),
 	);
 	assert.equal(noGate.details.cancelled, true, "authorization does not survive runtime restore");
-	assert.equal(restored.getState().teams.default.plan?.revision, 3);
+	assert.equal(restored.getState().teams.default.plan?.revision, 4);
 });
 
 test("legacy inline payloads are absent from schema and rejected while old state remains operable", async () => {
@@ -930,7 +952,8 @@ test("legacy inline payloads are absent from schema and rejected while old state
 	const runtime = new TeamRuntime(new FakeCompatibility(), () => NOW, () => "unused", () => new FakeDashboard());
 	runtime.restoreFromBranch([{ type: "custom", customType: STATE_ENTRY_TYPE, data: legacyState }]);
 	assert.match((await runtime.execute({ action: "status" }, context())).content[0].text, /legacy-state \(dispatch disabled\)/u);
-	await runtime.execute({ action: "stop", member: { id: "reviewer" } }, context());
+	const idleStop = await runtime.execute({ action: "stop", member: { id: "reviewer" } }, context());
+	assert.match(idleStop.content[0].text, /No active run to stop: reviewer/u, "stopping an idle member says so explicitly");
 	await runtime.execute({ action: "kill", member: { id: "reviewer" } }, context());
 	const member = runtime.getState().teams.default.members.reviewer;
 	assert.equal(member.sessionId, "legacy-session");
@@ -981,7 +1004,7 @@ test("plan USER_GATE rejection, cancellation, and no UI have zero side effects",
 	}
 });
 
-test("plan confirmation reports the true task total when its detail list is truncated", async () => {
+test("plan confirmation lists every task in full now that detail truncation is removed", async () => {
 	const manyTasks = structuredClone(PLAN);
 	manyTasks.tasks = Array.from({ length: 55 }, (_, index) => ({
 		id: `task-${index}`,
@@ -997,8 +1020,10 @@ test("plan confirmation reports the true task total when its detail list is trun
 		{ action: "plan", plan: manyTasks },
 		context({ confirm: async (_title, message) => { confirmation = message; return true; } }),
 	);
-	assert.match(confirmation, /Execution DAG \(55 tasks\):/u);
-	assert.match(confirmation, /\.\.\. 5 more tasks/u);
+	assert.match(confirmation, /## Execution DAG \(55 tasks\)/u);
+	assert.match(confirmation, /- \*\*task-0\*\* → coder-a\n  Objective 0\n  depends: none · owns: src\/task-0\n  acceptance: Task 0 accepted\./u);
+	assert.match(confirmation, /- \*\*task-54\*\* → coder-a\n  Objective 54/u);
+	assert.doesNotMatch(confirmation, /more tasks/u);
 });
 
 test("plan registration is one snapshot and amendment requires the exact revision", async () => {

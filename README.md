@@ -32,9 +32,9 @@ agent_team({
 })
 ```
 
-一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`set-auto` 默认关闭；关闭时 initial plan 和 amendment 使用同一有界 TUI/RPC USER_GATE，拒绝、取消或超时不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child。启用后只在当前 runtime/session 跳过这两个 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
+一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订（指令/任务/验收编辑）与既有成员的持续派发静默复用已批准授权。拒绝、取消或超时不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
 
-TUI 中该确认使用有界审阅视窗：`Yes` / `No` 固定可见，`↑` / `↓` 切换选项，`PageUp` / `PageDown` 滚动正文，`Enter` 确认，`Esc` / `Ctrl+C` 取消；用户自定义的 Pi select 键位同样生效。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
+TUI 中该确认使用有界审阅视窗：`Approve` / `Reject` 固定可见，`↑` / `↓` / `PageUp` / `PageDown` 滚动正文，`←` / `→` 或 `Tab` 切换选项，`Enter` 确认当前选中项，`Esc` / `Ctrl+C` 始终拒绝；正文为标准 Markdown（节标题/列表/加粗），TUI 端解析为主题色样式，IDE/RPC 端可直接渲染 MD，溢出时右缘显示滚动条。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
 
 已有计划用同一动作 amendment，并要求实时 revision 精确匹配：
 

@@ -520,24 +520,35 @@ function taskDefinition(task: ExecutionTask): string {
 }
 
 function planConfirmation(teamId: string, plan: PreparedPlan, revision: number): string {
+	// Canonical Markdown so every surface renders it well: IDE/RPC dialogs render
+	// MD natively, and the TUI confirm component parses the same structure into
+	// themed ANSI (headings/bold/bullets). No truncation - scrolling handles size.
 	const roster = Object.values(plan.configs)
 		.sort((a, b) => a.id.localeCompare(b.id))
-		.map((member) => `- ${member.id}: ${plan.memberKinds[member.id]} / ${member.role} / ${member.model.provider}/${member.model.id} / tools=${member.tools.join(",") || "all"}`);
+		.map((member) => {
+			const tools = member.tools.length > 0 ? ` · tools=${member.tools.join(",")}` : "";
+			return `- **${member.id}** — ${plan.memberKinds[member.id]} · ${member.role} · ${member.model.provider}/${member.model.id}${tools}`;
+		});
 	const allTasks = Object.values(plan.tasks).sort((a, b) => a.id.localeCompare(b.id));
-	const tasks = allTasks
-		.slice(0, 50)
-		.map((task) => `- ${task.id} -> ${task.memberId}; objective=${task.packet.objective.slice(0, 120)}; depends=${task.dependsOn.join(",") || "none"}; owns=${task.packet.ownedPaths.join(",")}; acceptance=${task.packet.acceptance.join(" | ").slice(0, 240)}`);
-	if (allTasks.length > tasks.length) tasks.push(`- ... ${allTasks.length - tasks.length} more tasks in the submitted plan payload`);
+	const tasks = allTasks.map((task) => [
+		`- **${task.id}** → ${task.memberId}`,
+		`  ${task.packet.objective}`,
+		`  depends: ${task.dependsOn.join(", ") || "none"} · owns: ${task.packet.ownedPaths.join(", ")}`,
+		...(task.packet.acceptance.length > 0 ? [`  acceptance: ${task.packet.acceptance.join(" | ")}`] : []),
+	]).flat();
 	return [
-		`Team: ${teamId}`,
-		`Plan revision: ${revision}`,
-		`Reviewer: ${plan.reviewerId}`,
-		`Roster (${roster.length}; persistent model sessions may incur cost):`,
+		`## Team: ${teamId}`,
+		`**Revision:** ${revision} · **Reviewer:** ${plan.reviewerId}`,
+		"",
+		`## Roster (${roster.length})`,
 		...roster,
-		`Execution DAG (${allTasks.length} tasks):`,
+		"",
+		`## Execution DAG (${allTasks.length} tasks)`,
 		...tasks,
-		`Global acceptance (${plan.acceptance.length}):`,
-		...plan.acceptance.map((item) => `- ${item.slice(0, 240)}`),
+		"",
+		`## Global acceptance (${plan.acceptance.length})`,
+		...plan.acceptance.map((item) => `- ${item}`),
+		"",
 		"Approval atomically fixes this roster, DAG, ownership, TaskPackets, and acceptance. Runtime will not dispatch any node automatically.",
 	].join("\n");
 }
@@ -1096,7 +1107,7 @@ export interface RunControl {
 
 export class TeamRuntime {
 	private state: TeamState;
-	// Session-scoped authorization for initial plan and amendment USER_GATEs.
+	// Session-scoped authorization for initial-plan and roster-growth USER_GATEs.
 	// It never dispatches work or records HUMAN_ACCEPT.
 	private autoApprove = false;
 	private readonly clients = new Map<string, RpcClientLike>();
@@ -1676,10 +1687,15 @@ export class TeamRuntime {
 			}
 		}
 		const revision = (currentRevision ?? 0) + 1;
-		if (!this.autoApprove) {
-			if (!ctx.hasUI) return this.cancelledResult("plan", "Plan registration/amendment requires a TUI/RPC USER_GATE confirmation or session-scoped set-auto authorization.");
+		// USER_GATE granularity: initial registration and roster growth require explicit
+		// consent; amendments within the already-approved roster (instruction/task/
+		// acceptance edits, re-dispatching existing members) reuse that consent silently.
+		// The roster can only grow - preparePlan forbids removing existing members.
+		const rosterGrew = current !== undefined && Object.keys(prepared.configs).some((id) => !current.members[id]);
+		if (!this.autoApprove && (current === undefined || rosterGrew)) {
+			if (!ctx.hasUI) return this.cancelledResult("plan", "Plan registration/roster growth requires a TUI/RPC USER_GATE confirmation or session-scoped set-auto authorization.");
 			const approved = await ctx.confirm(
-				currentRevision === undefined ? "Register Agent Team plan" : "Amend Agent Team plan",
+				currentRevision === undefined ? "Register Agent Team plan" : "Grow Agent Team roster",
 				planConfirmation(teamId, prepared, revision),
 				{ signal, timeout: 120_000 },
 			);
@@ -2543,6 +2559,7 @@ export class TeamRuntime {
 	private async stopResult(teamId: string, id: string | undefined, ctx: RuntimeContext): Promise<RuntimeToolResult> {
 		const members = this.state.teams[teamId]?.members ?? {};
 		const targets = id ? [members[id]].filter(Boolean) : Object.values(members);
+		const idle: string[] = [];
 		await Promise.allSettled(
 			targets.map(async (member) => {
 				const key = memberKey(teamId, member.id);
@@ -2554,11 +2571,14 @@ export class TeamRuntime {
 					// Await the racing finalization: it releases the active slot, drops any
 					// collectable result, and resolves the control's completion promise.
 					await control.completed;
+				} else {
+					idle.push(member.id);
 				}
 			}),
 		);
 		if (targets.length > 0 && !this.readOnlyError) this.persist(ctx);
 		const lines = targets.length ? formatRoster(teamId, members) : [`Team ${teamId} has no members.`];
+		if (idle.length > 0) lines.push(`No active run to stop: ${idle.join(", ")} (member${idle.length > 1 ? "s" : ""} idle).`);
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: { action: "stop", warning: this.persistenceWarning(ctx) },
