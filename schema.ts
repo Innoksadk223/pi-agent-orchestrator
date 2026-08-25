@@ -68,11 +68,15 @@ const Plan = Type.Object(
 
 export const AgentTeamParams = Type.Object(
 	{
-		action: StringEnum(["plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "set-model", "set-auto"] as const),
+		action: StringEnum(["plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "cancel", "set-model", "set-auto"] as const),
 		team: Type.Optional(Id),
 		member: Type.Optional(Member),
 		plan: Type.Optional(Plan),
 		expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+		// plan only: validate the draft plan through every semantic check (revision,
+		// DAG, owned paths, amendment constraints) without USER_GATE, persistence,
+		// revision consumption, or workspace writes.
+		validateOnly: Type.Optional(Type.Boolean()),
 		taskId: Type.Optional(Id),
 		taskIds: Type.Optional(Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true })),
 		reviewRoundId: Type.Optional(Id),

@@ -281,11 +281,14 @@ interface DispatchTask {
 }
 
 export interface ToolParams {
-	action: "plan" | "run" | "parallel" | "review" | "expert" | "wait" | "status" | "stop" | "kill" | "set-model" | "set-auto";
+	action: "plan" | "run" | "parallel" | "review" | "expert" | "wait" | "status" | "stop" | "kill" | "cancel" | "set-model" | "set-auto";
 	team?: string;
 	member?: MemberInput;
 	plan?: PlanInput;
 	expectedRevision?: number;
+	// plan-only draft check: run every semantic validation without USER_GATE,
+	// persistence, revision consumption, or workspace writes.
+	validateOnly?: boolean;
 	taskId?: string;
 	taskIds?: string[];
 	reviewRoundId?: string;
@@ -418,7 +421,44 @@ export function pathsConflict(left: string, right: string): boolean {
 	return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-interface PreparedPlan {
+/**
+ * Resolve a cancel request against live task states. Requested tasks must sit in
+ * a non-in-flight status (RUNNING belongs to stop/kill, SUBMITTED/FIX_REQUIRED
+ * to the review loop); PENDING/READY transitive dependents of any canceled task
+ * cascade so no never-dispatched task is left waiting on an unsatisfiable
+ * dependency. In-flight blocked/fix states keep their explicit recovery paths:
+ * the Leader must decide on those individually instead of being cascaded away.
+ */
+export function resolveTaskCancellation(
+	tasks: Record<string, ExecutionTask>,
+	requestedIds: string[],
+): Array<{ id: string; direct: boolean }> {
+	const CANCELABLE: ExecutionTaskStatus[] = ["PENDING", "READY", "BLOCKED", "REPORT_INVALID"];
+	for (const id of requestedIds) {
+		const task = tasks[id];
+		if (!task) throw new TeamInputError(`Unknown execution task ${id}.`);
+		if (!CANCELABLE.includes(task.status)) {
+			throw new TeamInputError(
+				`Task ${id} cannot be canceled from ${task.status}; use stop/kill while RUNNING and resolve its review loop when SUBMITTED or FIX_REQUIRED.`,
+			);
+		}
+	}
+	const canceled = new Set(requestedIds);
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const task of Object.values(tasks)) {
+			if ((task.status !== "PENDING" && task.status !== "READY") || canceled.has(task.id)) continue;
+			if (task.dependsOn.some((dependency) => canceled.has(dependency))) {
+				canceled.add(task.id);
+				grew = true;
+			}
+		}
+	}
+	return [...canceled].map((id) => ({ id, direct: requestedIds.includes(id) }));
+}
+
+export interface PreparedPlan {
 	configs: Record<string, MemberConfig>;
 	memberKinds: Record<string, PlanMemberKind>;
 	tasks: Record<string, ExecutionTask>;
@@ -519,38 +559,120 @@ function taskDefinition(task: ExecutionTask): string {
 	return JSON.stringify({ id: task.id, memberId: task.memberId, dependsOn: task.dependsOn, packet: { ...task.packet, dependencySummaries: {} } });
 }
 
-function planConfirmation(teamId: string, plan: PreparedPlan, revision: number): string {
-	// Canonical Markdown so every surface renders it well: IDE/RPC dialogs render
-	// MD natively, and the TUI confirm component parses the same structure into
-	// themed ANSI (headings/bold/bullets). No truncation - scrolling handles size.
-	const roster = Object.values(plan.configs)
-		.sort((a, b) => a.id.localeCompare(b.id))
-		.map((member) => {
-			const tools = member.tools.length > 0 ? ` · tools=${member.tools.join(",")}` : "";
-			return `- **${member.id}** — ${plan.memberKinds[member.id]} · ${member.role} · ${member.model.provider}/${member.model.id}${tools}`;
-		});
-	const allTasks = Object.values(plan.tasks).sort((a, b) => a.id.localeCompare(b.id));
-	const tasks = allTasks.map((task) => [
-		`- **${task.id}** → ${task.memberId}`,
+function changedConfigFields(existing: MemberState, next: MemberConfig): string[] {
+	const fields: string[] = [];
+	if (existing.role !== next.role) fields.push("role");
+	if (existing.instructions !== next.instructions) fields.push("instructions");
+	if (existing.model.provider !== next.model.provider || existing.model.id !== next.model.id) fields.push("model");
+	if (existing.thinking !== next.thinking) fields.push("thinking");
+	if (JSON.stringify([...existing.tools].sort()) !== JSON.stringify([...next.tools].sort())) fields.push("tools");
+	return fields;
+}
+
+function changedTaskFields(existing: ExecutionTask, replacement: ExecutionTask): string[] {
+	const fields: string[] = [];
+	if (existing.memberId !== replacement.memberId) fields.push("memberId");
+	if (JSON.stringify(existing.dependsOn) !== JSON.stringify(replacement.dependsOn)) fields.push("dependsOn");
+	for (const key of ["objective", "constraints", "ownedPaths", "acceptance", "relevantPaths", "outputContract"] as const) {
+		if (JSON.stringify(existing.packet[key]) !== JSON.stringify(replacement.packet[key])) fields.push(key);
+	}
+	return fields;
+}
+
+function memberLine(kind: PlanMemberKind, member: MemberConfig): string {
+	const tools = member.tools.length > 0 ? ` · tools=${member.tools.join(",")}` : "";
+	return `**${member.id}** — ${kind} · ${member.role} · ${member.model.provider}/${member.model.id}${tools}`;
+}
+
+function taskBlock(task: ExecutionTask): string[] {
+	return [
+		`**${task.id}** → ${task.memberId}`,
 		`  ${task.packet.objective}`,
 		`  depends: ${task.dependsOn.join(", ") || "none"} · owns: ${task.packet.ownedPaths.join(", ")}`,
 		...(task.packet.acceptance.length > 0 ? [`  acceptance: ${task.packet.acceptance.join(" | ")}`] : []),
-	]).flat();
+	];
+}
+
+function fullPlanSections(plan: PreparedPlan): string[] {
+	const roster = Object.values(plan.configs)
+		.sort((a, b) => a.id.localeCompare(b.id))
+		.map((member) => `- ${memberLine(plan.memberKinds[member.id], member)}`);
+	const allTasks = Object.values(plan.tasks).sort((a, b) => a.id.localeCompare(b.id));
 	return [
-		`## Team: ${teamId}`,
-		`**Revision:** ${revision} · **Reviewer:** ${plan.reviewerId}`,
-		"",
 		`## Roster (${roster.length})`,
 		...roster,
 		"",
 		`## Execution DAG (${allTasks.length} tasks)`,
-		...tasks,
+		...allTasks.flatMap((task) => taskBlock(task).map((line, index) => (index === 0 ? `- ${line}` : line))),
 		"",
 		`## Global acceptance (${plan.acceptance.length})`,
 		...plan.acceptance.map((item) => `- ${item}`),
-		"",
-		"Approval atomically fixes this roster, DAG, ownership, TaskPackets, and acceptance. Runtime will not dispatch any node automatically.",
-	].join("\n");
+	];
+}
+
+function amendmentSections(current: TeamRecord, plan: PreparedPlan): string[] {
+	const approved = current.plan!;
+	const lines = [`## Changes vs approved revision ${approved.revision}`, ""];
+	// Roster: additions get the full member line; edits list only what changed.
+	const addedMembers = Object.keys(plan.configs).filter((id) => !current.members[id]).sort();
+	const changedMembers = Object.keys(plan.configs)
+		.filter((id) => current.members[id] && (plan.memberKinds[id] !== approved.memberKinds[id] || configHash(plan.configs[id]) !== current.members[id].configHash))
+		.sort();
+	const unchangedMembers = Object.keys(plan.configs).length - addedMembers.length - changedMembers.length;
+	lines.push(`### Roster (+${addedMembers.length} / ~${changedMembers.length}${unchangedMembers ? ` / =${unchangedMembers} unchanged` : ""})`);
+	for (const id of addedMembers) lines.push(`- + ${memberLine(plan.memberKinds[id], plan.configs[id])}`);
+	for (const id of changedMembers) {
+		const changes = [
+			...(plan.memberKinds[id] !== approved.memberKinds[id] ? [`kind → ${plan.memberKinds[id]}`] : []),
+			...changedConfigFields(current.members[id], plan.configs[id]),
+		];
+		// Hash-based detection can disagree with field-level diff on hand-built
+		// states; never render an empty "— changed" line.
+		lines.push(`- ~ **${id}** — ${changes.length > 0 ? `${changes.join(", ")} changed` : "config updated"}`);
+	}
+	if (addedMembers.length === 0 && changedMembers.length === 0) lines.push("- no roster changes");
+	lines.push("");
+	// Tasks: additions get the full task block; edits list only what changed.
+	const addedTasks = Object.keys(plan.tasks).filter((id) => !current.executionTasks[id]).sort();
+	const changedTasks = Object.keys(plan.tasks)
+		.filter((id) => current.executionTasks[id] && taskDefinition(current.executionTasks[id]) !== taskDefinition(plan.tasks[id]))
+		.sort();
+	const unchangedTasks = Object.keys(plan.tasks).length - addedTasks.length - changedTasks.length;
+	lines.push(`### Tasks (+${addedTasks.length} / ~${changedTasks.length}${unchangedTasks ? ` / =${unchangedTasks} unchanged` : ""})`);
+	for (const id of addedTasks) lines.push(...taskBlock(plan.tasks[id]).map((line, index) => (index === 0 ? `- + ${line}` : line)));
+	for (const id of changedTasks) lines.push(`- ~ **${id}** — ${changedTaskFields(current.executionTasks[id], plan.tasks[id]).join(", ")} changed`);
+	if (addedTasks.length === 0 && changedTasks.length === 0) lines.push("- no task changes");
+	lines.push("");
+	const previousAcceptance = new Set(approved.acceptance);
+	const nextAcceptance = new Set(plan.acceptance);
+	const removedAcceptance = approved.acceptance.filter((item) => !nextAcceptance.has(item));
+	const addedAcceptance = plan.acceptance.filter((item) => !previousAcceptance.has(item));
+	if (removedAcceptance.length === 0 && addedAcceptance.length === 0) {
+		lines.push(`### Global acceptance (= unchanged, ${plan.acceptance.length} items)`);
+	} else {
+		lines.push(`### Global acceptance (-${removedAcceptance.length} / +${addedAcceptance.length})`);
+		for (const item of removedAcceptance) lines.push(`- − ${item}`);
+		for (const item of addedAcceptance) lines.push(`- + ${item}`);
+	}
+	return lines;
+}
+
+export function planConfirmation(teamId: string, plan: PreparedPlan, revision: number, current?: TeamRecord): string {
+	// Canonical Markdown so every surface renders it well: IDE/RPC dialogs render
+	// MD natively, and the TUI confirm component parses the same structure into
+	// themed ANSI (headings/bold/bullets). No truncation - scrolling handles size.
+	const header = [
+		`## Team: ${teamId}`,
+		`**Revision:** ${revision} · **Reviewer:** ${plan.reviewerId}`,
+	];
+	// Verdict-authority change is always surfaced, even in silent same-roster amendments.
+	if (current?.plan && current.plan.reviewerId !== plan.reviewerId) {
+		header.push(`⚠ Reviewer changed: ${current.plan.reviewerId} → ${plan.reviewerId}`);
+	}
+	const footer =
+		"Approval atomically fixes this roster, DAG, ownership, TaskPackets, and acceptance. Runtime will not dispatch any node automatically.";
+	const body = current?.plan ? amendmentSections(current, plan) : fullPlanSections(plan);
+	return [...header, "", ...body, "", footer].join("\n");
 }
 
 export function validateToolRequest(params: ToolParams, state: TeamState): void {
@@ -558,6 +680,9 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 	if (!ID_PATTERN.test(teamId)) throw new TeamInputError(`Invalid team id: ${teamId}`);
 	if ("task" in params || "tasks" in params) {
 		throw new TeamInputError("Legacy inline member/task/tasks dispatch is no longer supported; register a plan and use taskId/taskIds.");
+	}
+	if (params.validateOnly !== undefined && params.action !== "plan") {
+		throw new TeamInputError("validateOnly is only valid with action plan.");
 	}
 	const team = state.teams[teamId];
 	const existing = team?.members ?? {};
@@ -594,6 +719,14 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 			throw new TeamInputError(`Planned parallel requires 2-${MAX_PARALLEL_TASKS} taskIds.`);
 		}
 		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
+		return;
+	}
+	if (params.action === "cancel") {
+		if (!team?.plan) throw new TeamInputError(`cancel requires a registered plan for team ${teamId}.`);
+		if (!params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length) {
+			throw new TeamInputError(`cancel requires 1-${MAX_PARALLEL_TASKS} unique taskIds.`);
+		}
+		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full");
 		return;
 	}
 	if (params.action === "review") {
@@ -1189,12 +1322,13 @@ export class TeamRuntime {
 		const teamId = params.team ?? "default";
 		if (params.action === "plan") {
 			if (this.readOnlyError) throw new TeamStateError(this.readOnlyError);
-			return this.planResult(teamId, params.plan as PlanInput, params.expectedRevision, ctx, signal);
+			return this.planResult(teamId, params.plan as PlanInput, params.expectedRevision, ctx, signal, params.validateOnly === true);
 		}
 		await this.sweepIdleClients();
 		if (params.action === "status") return this.statusResult(teamId, params.member?.id, params.full === true, ctx);
 		if (params.action === "stop") return this.stopResult(teamId, params.member?.id, ctx);
 		if (params.action === "kill") return this.killResult(teamId, params.member?.id, ctx);
+		if (params.action === "cancel") return this.cancelResult(teamId, params.taskIds as string[], ctx);
 		if (this.readOnlyError) throw new TeamStateError(this.readOnlyError);
 		this.lastCompatibility = await this.compatibility.featureCheck(ctx.capabilities);
 		if (!this.lastCompatibility.ok) {
@@ -1658,6 +1792,7 @@ export class TeamRuntime {
 		expectedRevision: number | undefined,
 		ctx: RuntimeContext,
 		signal?: AbortSignal,
+		validateOnly = false,
 	): Promise<RuntimeToolResult> {
 		const current = this.state.teams[teamId];
 		const currentRevision = current?.plan?.revision;
@@ -1687,6 +1822,19 @@ export class TeamRuntime {
 			}
 		}
 		const revision = (currentRevision ?? 0) + 1;
+		// Dry-run: every validation above already ran (revision match, idle team,
+		// preparePlan, member/task amendment constraints). Stop here without USER_GATE,
+		// persistence, revision consumption, or workspace writes so the Leader can
+		// iterate on a draft plan cheaply before the real submission.
+		if (validateOnly) {
+			return {
+				content: [{
+					type: "text",
+					text: `Plan validation passed for team ${teamId}: revision ${revision} would ${current ? "amend to" : "register"} ${Object.keys(prepared.configs).length} members and ${Object.keys(prepared.tasks).length} tasks. Nothing was persisted and no gate was shown; submit with action plan when ready.`,
+				}],
+				details: { action: "plan" },
+			};
+		}
 		// USER_GATE granularity: initial registration and roster growth require explicit
 		// consent; amendments within the already-approved roster (instruction/task/
 		// acceptance edits, re-dispatching existing members) reuse that consent silently.
@@ -1695,8 +1843,8 @@ export class TeamRuntime {
 		if (!this.autoApprove && (current === undefined || rosterGrew)) {
 			if (!ctx.hasUI) return this.cancelledResult("plan", "Plan registration/roster growth requires a TUI/RPC USER_GATE confirmation or session-scoped set-auto authorization.");
 			const approved = await ctx.confirm(
-				currentRevision === undefined ? "Register Agent Team plan" : "Grow Agent Team roster",
-				planConfirmation(teamId, prepared, revision),
+				currentRevision === undefined ? "Register Agent Team plan" : "Amend Agent Team plan",
+				planConfirmation(teamId, prepared, revision, current),
 				{ signal, timeout: 120_000 },
 			);
 			if (!approved) return this.cancelledResult("plan", `User declined plan revision ${revision} for ${teamId}.`);
@@ -2626,6 +2774,31 @@ export class TeamRuntime {
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: { action: "kill", warning: this.persistenceWarning(ctx) },
+		};
+	}
+
+	/**
+	 * Explicitly abandon planned tasks that are not in flight: release their
+	 * owned-path locks and cascade cancellation to their PENDING/READY dependents.
+	 */
+	private cancelResult(teamId: string, taskIds: string[], ctx: RuntimeContext): RuntimeToolResult {
+		const team = this.state.teams[teamId];
+		if (!team?.plan) throw new TeamStateError(`Team ${teamId} has no registered plan.`);
+		const resolved = resolveTaskCancellation(team.executionTasks, taskIds).sort((a, b) => a.id.localeCompare(b.id));
+		const now = this.now();
+		const lines: string[] = [];
+		for (const { id, direct } of resolved) {
+			const task = team.executionTasks[id];
+			task.status = "CANCELED";
+			task.lastIssue = direct ? "Leader canceled the task." : "Upstream task canceled; dependency unsatisfiable.";
+			delete task.fixPrompt;
+			task.updatedAt = now;
+			lines.push(`${id}: CANCELED${direct ? "" : " (cascaded)"}`);
+		}
+		if (!this.readOnlyError) this.persist(ctx);
+		return {
+			content: [{ type: "text", text: [`Team ${teamId} canceled ${resolved.length} task(s):`, ...lines].join("\n") }],
+			details: { action: "cancel", warning: this.persistenceWarning(ctx) },
 		};
 	}
 

@@ -32,6 +32,12 @@ interface AgentTeamConfirmComponentOptions {
 }
 
 export class AgentTeamConfirmComponent implements Component {
+	// This component renders inside the app layout's editor slot (a shrink:1
+	// sibling of transcript/status/widgets/footer), so it can never get the full
+	// terminal height. Budgeting terminal.rows makes the VStack slice off the
+	// bottom - exactly the Approve/Reject line. Cap the dialog conservatively;
+	// ponytail: fixed cap, switch to an overlay dialog if small terminals clip.
+	static readonly MAX_DIALOG_ROWS = 20;
 	private readonly title: string;
 	private readonly message: string;
 	private readonly tui: TUI;
@@ -124,7 +130,10 @@ export class AgentTeamConfirmComponent implements Component {
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, Math.floor(width));
-		const heightBudget = Math.max(1, Math.floor(this.tui.terminal.rows || 1));
+		const heightBudget = Math.min(
+			Math.max(1, Math.floor(this.tui.terminal.rows || 1)),
+			AgentTeamConfirmComponent.MAX_DIALOG_ROWS,
+		);
 		if (heightBudget === 1) return [this.fit(this.optionsLine(), safeWidth)];
 
 		const showTitle = heightBudget >= 3;

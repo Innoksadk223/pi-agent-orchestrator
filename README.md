@@ -42,6 +42,8 @@ TUI 中该确认使用有界审阅视窗：`Approve` / `Reject` 固定可见，`
 agent_team({ action: "plan", team: "default", expectedRevision: 1, plan: nextPlan })
 ```
 
+提交前可先 `validateOnly: true` 预检同一份草稿：跑全部语义校验（revision、DAG、owned paths、amendment 约束），但不触发 USER_GATE、不消耗 revision、不落盘。amendment 的确认门只显示增量 diff（新增/变更成员与任务、acceptance 增删、reviewer 变更高亮）；初始注册仍显示完整计划。
+
 计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证，并在 auto 关闭时重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
 
 ## 手动推进
@@ -54,6 +56,7 @@ agent_team({ action: "parallel", taskIds: ["a", "b"] })
 agent_team({ action: "review", reviewRoundId: "review-1", taskIds: ["implementation"] })
 agent_team({ action: "expert", expertRoundId: "opt-1", expertId: "optimizer", taskIds: ["implementation"], objective: "检查低风险优化候选" })
 agent_team({ action: "set-model", member: { id: "coder", model: "provider/model", thinking: "high" } })
+agent_team({ action: "cancel", taskIds: ["dropped"] })
 ```
 
 计划派工先对整批完成 schema、revision、DAG、成员可用性、owned-path 与冲突 preflight；随后创建 workspace、准备 Dashboard 并启动整批 client，最后才激活并发送 prompt。Dashboard 或 client 启动失败不会发送任何 prompt；parallel prompt 任一失败会中断同批其余 attempt 并等待它们离开 `RUNNING`。默认后台 `run` / `parallel` / `review` / `expert` 成功接受任务后，会结束 Leader 当前自动工具回合并立即恢复主 Pi 输入；成员继续在后台运行，settled 后仍通过既有 `followUp + triggerTurn` 异步回报。显式 `background:false` 保持前台等待行为。
@@ -62,6 +65,7 @@ agent_team({ action: "set-model", member: { id: "coder", model: "provider/model"
 - owner 已授权且空闲；parallel 中成员互异；
 - owned path 是规范化的 cwd 相对具体路径，不允许绝对路径、`..` 或 glob；
 - 路径相等或存在父子前缀即冲突；从 `RUNNING` 到 `VERIFIED/CANCELED` 持锁；
+- `cancel {taskIds}` 显式放弃 PENDING/READY/BLOCKED/REPORT_INVALID 任务并释放路径锁，依赖它的 PENDING/READY 任务级联取消（在途的 BLOCKED 修复与 SUBMITTED/FIX_REQUIRED review 循环不级联，由 Leader 单独决定）；
 - ReviewRound 只接收 `SUBMITTED`；optimizer 只附着 `VERIFIED`；专家不取写锁。
 
 所有新派工都要求已注册 plan。旧 TeamState/成员/Session 仍可通过 `status`、`wait`、`stop`、`kill`、`set-model` 和恢复路径读取使用，但 inline `member + task`、inline `tasks[]` 以及无计划 `run/parallel` 会明确拒绝；runtime 不删除或覆盖旧 workspace 与 Session。

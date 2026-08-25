@@ -122,6 +122,17 @@ test("long confirmation keeps Approve and Reject visible within 20/40/120 column
 	}
 });
 
+test("tall terminal budgets are capped so the editor-slot VStack can never slice off the action row", () => {
+	// Regression: the dialog budgeted tui.terminal.rows, but it renders inside a
+	// shrink:1 editor slot; oversized output got cut at the bottom, hiding Approve/Reject.
+	const { dialog } = component({ rows: 60, message: "line\n".repeat(80) });
+	const lines = dialog.render(80);
+	assert.ok(lines.length <= AgentTeamConfirmComponent.MAX_DIALOG_ROWS, "dialog exceeded its own row cap");
+	const output = plain(lines).join("\n");
+	assert.match(output, /Approve.*Reject/us, "action row must survive the height cap");
+	dialog.dispose();
+});
+
 test("arrow keys switch buttons, Enter commits the selection, Tab toggles, Esc always rejects", () => {
 	const decisions: boolean[] = [];
 

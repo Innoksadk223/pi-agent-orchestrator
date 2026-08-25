@@ -32,6 +32,17 @@ initial 注册与名册增长（新增成员）各是一次 confirmation（USER_
 
 未规划 team 可继续 ad-hoc `run/parallel`。注册 plan 后只用 planned 标识，不以 ad-hoc payload 扩大范围。
 
+## 修订先商量
+
+收到修改诉求不要立刻提交 amendment。顺序固定：
+
+1. 与用户讨论变更集：改什么、为什么、影响哪些任务与 owned paths；
+2. 双方达成一致后，询问是否输出修订计划；
+3. 明确同意后才调用 `agent_team plan`。可先用 `validateOnly:true` 预检草稿（跑全部语义校验但不触发确认门、不消耗 revision、不落盘）；
+4. 提交后确认门对 amendment 只显示增量 diff（新增/变更成员与任务、acceptance 增删、reviewer 变更高亮）。
+
+禁止在同一回合内「听改动 → 直接提交」。讨论中确定不要的任务用 `cancel {taskIds}` 显式放弃（释放 owned-path 锁，PENDING/READY 传递依赖自动级联取消）；RUNNING 用 stop/kill，SUBMITTED/FIX_REQUIRED 先走完 review 循环。
+
 ## 手动循环
 
 Leader 按实时 TeamState 显式推进：
@@ -45,6 +56,7 @@ plan -> run/parallel READY task -> SUBMITTED
 
 - `run {taskId}`：启动一个 READY、FIX_REQUIRED 或显式恢复节点。
 - `parallel {taskIds}`：只派互异成员、依赖已 VERIFIED、owned paths 两两不冲突的批次。
+- `cancel {taskIds}`：放弃 PENDING/READY/BLOCKED/REPORT_INVALID 任务并释放其路径锁；依赖它的 PENDING/READY 任务级联取消。RUNNING 用 stop/kill，SUBMITTED/FIX_REQUIRED 先走 review 循环。
 - `review {reviewRoundId, taskIds}`：只审 SUBMITTED；计划 Reviewer 是唯一判定者。
 - `expert {expertRoundId, expertId, taskIds, objective}`：仅预批准 debugger/product/optimizer；只读、不取 ownership、不写 verdict。optimizer 只接 VERIFIED。
 - runtime 永不自动调用下一动作。Leader解释 Reviewer/专家意见并决定下一显式调用。
