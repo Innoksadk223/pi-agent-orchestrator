@@ -3034,6 +3034,9 @@ export class TeamRuntime {
 		ctx: RuntimeContext,
 	): Promise<RuntimeToolResult> {
 		const team = this.state.teams[teamId];
+		if (!team) {
+			return { content: [{ type: "text", text: `Team ${teamId}: not registered in this session (no plan or members).` }], details: { action: "status", team: teamId } };
+		}
 		const members = team?.members ?? {};
 		const targets = id ? [members[id]].filter(Boolean) : Object.values(members);
 		const dashboard = this.dashboardDetails(targets, ctx);
