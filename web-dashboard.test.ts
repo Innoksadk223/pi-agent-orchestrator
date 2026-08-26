@@ -533,6 +533,7 @@ test("Workbench HTML is self-contained, observer-plus-model-thinking-switcher, s
 	assert.doesNotMatch(html, /innerHTML|insertAdjacentHTML|document\.write/iu);
 	assert.match(html, /textContent/gu);
 	assert.match(html, /prefers-reduced-motion/u);
+	assert.match(html, /\.status-badge\s*\{[^}]*border-radius:\s*999px/u);
 	assert.match(html, /summaryTimer = setInterval/u);
 	assert.match(html, /clearInterval\(summaryTimer\)/u);
 	assert.match(html, /:focus-visible/u);
@@ -1499,4 +1500,100 @@ test("planned workspace is minimal and only Pi native auto-compaction remains wi
 	assert.deepEqual(client.setAutoCompactionCalls, [true]);
 	assert.equal(client.manualCompactionCalls.length, 0, "settled runs never invoke orchestrator-side compaction");
 	assert.deepEqual(await readdir(join(workspace, "members", "coder-a")), ["identity.md"]);
+});
+
+test("inline markdown renderer keeps fences, envelopes, list numbering, and quotes", async () => {
+	const html = await readFile(new URL("./web-dashboard.html", import.meta.url), "utf8");
+	const extractSource = (name: string): string => {
+		const at = html.indexOf(`const ${name} = `);
+		assert.ok(at >= 0, `extracts ${name} from inline script`);
+		let depth = 0;
+		let end = -1;
+		for (let i = html.indexOf("{", at); i < html.length; i += 1) {
+			if (html[i] === "{") depth += 1;
+			else if (html[i] === "}") {
+				depth -= 1;
+				if (depth === 0) {
+					end = i;
+					break;
+				}
+			}
+		}
+		assert.ok(end > at, `closes ${name}`);
+		return html.slice(at, end + 1);
+	};
+	const shimText = (value: string): any => ({
+		nodeType: 3,
+		text: value,
+		childNodes: [],
+		append: () => {},
+		get textContent() {
+			return this.text;
+		},
+	});
+	const shimElement = (tagName: string): any => {
+		const el: any = {
+			tagName: tagName.toUpperCase(),
+			className: "",
+			childNodes: [],
+			append(...kids: any[]) {
+				el.childNodes.push(...kids);
+			},
+		};
+		Object.defineProperty(el, "lastChild", { get: () => el.childNodes.at(-1) ?? null });
+		Object.defineProperty(el, "textContent", {
+			get: () => el.childNodes.map((child: any) => child.textContent).join(""),
+			set: (value: string) => {
+				el.childNodes.push(shimText(value));
+			},
+		});
+		return el;
+	};
+	const shimDocument = {
+		createElement: (tag: string) => shimElement(tag),
+		createTextNode: (value: string) => shimText(value),
+	};
+	const loadRenderer = () => {
+		const source = ["splitInline", "appendInline", "renderMarkdown"].map(extractSource).join("\n");
+		return new Function("document", `"use strict";\n${source}\nreturn { splitInline, appendInline, renderMarkdown };`)(shimDocument);
+	};
+	const render = (input: string) => loadRenderer().renderMarkdown(input).childNodes;
+
+	// (a) fenced json block becomes pre>code.lang-json with indentation preserved verbatim
+	const fenced = render("before\n```json\n{\n  \"kept\": \"  indent\"\n}\n```\nafter");
+	assert.equal(fenced.length, 3);
+	assert.equal(fenced[0].tagName, "P");
+	assert.equal(fenced[1].tagName, "PRE");
+	assert.equal(fenced[1].childNodes[0].tagName, "CODE");
+	assert.equal(fenced[1].childNodes[0].className, "lang-json");
+	assert.equal(fenced[1].childNodes[0].textContent, '{\n  "kept": "  indent"\n}\n');
+	assert.equal(fenced[2].tagName, "P");
+
+	// (b) single-line agent_team_report envelope becomes pre>code.lang-json; unparseable lookalike stays prose
+	const envelopeLine = '{"agent_team_report":{"type":"execution","taskId":"task-a","status":"SUBMITTED","summary":"s","evidence":[],"requests":[]}}';
+	const enveloped = render(`body line\n${envelopeLine}`);
+	assert.equal(enveloped.length, 2);
+	assert.equal(enveloped[1].tagName, "PRE");
+	assert.equal(enveloped[1].childNodes[0].className, "lang-json");
+	assert.equal(enveloped[1].childNodes[0].textContent, envelopeLine);
+	const malformed = render('{"agent_team_report": definitely not json}');
+	assert.equal(malformed.length, 1);
+	assert.equal(malformed[0].tagName, "P");
+
+	// (c) ordered lists keep source numbering via start; plain prose terminates the list
+	const ordered = render("intro\n3. third\n4. fourth\nprose breaks it\n9. ninth");
+	assert.equal(ordered.length, 4);
+	assert.equal(ordered[0].tagName, "P");
+	assert.equal(ordered[1].tagName, "OL");
+	assert.equal(ordered[1].start, 3);
+	assert.deepEqual(ordered[1].childNodes.map((li: any) => li.textContent), ["third", "fourth"]);
+	assert.equal(ordered[2].tagName, "P");
+	assert.equal(ordered[3].tagName, "OL");
+	assert.equal(ordered[3].start, 9);
+
+	// (d) consecutive "> " lines merge into a single blockquote
+	const quoted = render("> first quoted\n> second quoted");
+	assert.equal(quoted.length, 1);
+	assert.equal(quoted[0].tagName, "BLOCKQUOTE");
+	assert.equal(quoted[0].textContent, "first quoted\nsecond quoted");
 });

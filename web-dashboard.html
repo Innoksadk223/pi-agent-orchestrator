@@ -60,6 +60,28 @@
 			--dur-micro: 100ms;
 			--dur-short: 160ms;
 			--dur-entry: 260ms;
+			/* 成员状态徽章语义色：浅底+深字配对，对比度均≥4.5:1 */
+			--status-running-line: var(--accent);
+			--status-running-ink: var(--accent-ink);
+			--status-running-soft: var(--accent-soft);
+			--status-starting-line: var(--warn);
+			--status-starting-ink: var(--warn-ink);
+			--status-starting-soft: oklch(94% 0.05 55);
+			--status-error-line: oklch(68% 0.15 27);
+			--status-error-ink: oklch(44% 0.16 27);
+			--status-error-soft: oklch(94% 0.035 27);
+			--status-settled-line: oklch(66% 0.13 150);
+			--status-settled-ink: oklch(41% 0.11 150);
+			--status-settled-soft: oklch(94% 0.05 150);
+			--status-approved-line: oklch(64% 0.14 288);
+			--status-approved-ink: oklch(41% 0.12 288);
+			--status-approved-soft: oklch(94% 0.04 288);
+			--status-idle-line: var(--rule-strong);
+			--status-idle-ink: var(--ink-soft);
+			--status-idle-soft: var(--surface-muted);
+			--status-interrupted-line: oklch(67% 0.15 45);
+			--status-interrupted-ink: oklch(43% 0.14 45);
+			--status-interrupted-soft: oklch(94% 0.045 45);
 		}
 
 		* { box-sizing: border-box; }
@@ -372,37 +394,48 @@
 			color: var(--ink-soft);
 			font-size: var(--text-base);
 		}
-		.selected-status {
+		.status-badge {
 			display: inline-flex;
 			align-items: center;
 			gap: var(--space-xs);
-			min-height: 2.75rem;
-			color: var(--ink-soft);
-			font-family: var(--font-mono);
-			font-size: var(--text-xs);
-			text-transform: uppercase;
+			align-self: center;
+			padding: 0.3em 0.85em;
+			border: var(--rule-thin) solid transparent;
+			border-radius: 999px;
+			background: var(--status-idle-soft);
+			color: var(--status-idle-ink);
+			font-family: var(--font-body);
+			font-size: var(--text-sm);
+			line-height: 1.4;
 			white-space: nowrap;
+			transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
 		}
-		.selected-status::before {
+		.status-badge::before {
 			content: "";
-			width: var(--text-2xs);
-			height: var(--text-2xs);
-			border: var(--rule-thin) solid var(--rule-strong);
-			border-radius: 50%;
+			flex: none;
+			width: 8px;
+			height: 8px;
+			border-radius: 999px;
+			background: currentColor;
 		}
-		.selected-status[data-state="running"]::before,
-		.selected-status[data-state="starting"]::before,
-		.selected-status[data-state="retry"]::before {
-			border-color: var(--accent-ink);
-			background: var(--accent);
+		.status-badge-sm {
+			gap: var(--space-2xs);
+			padding: 0.15em 0.6em;
+			font-size: var(--text-2xs);
 		}
-		.selected-status[data-state="error"]::before,
-		.selected-status[data-state="interrupted"]::before,
-		.selected-status[data-state="stopped"]::before {
-			border-radius: var(--radius-sm);
-			border-color: var(--ink-soft);
-			background: var(--ink-soft);
+		.status-badge-sm::before {
+			width: 6px;
+			height: 6px;
 		}
+		.status-badge[data-state="running"] { color: var(--status-running-ink); background: var(--status-running-soft); border-color: var(--status-running-line); }
+		.status-badge[data-state="starting"],
+		.status-badge[data-state="retry"] { color: var(--status-starting-ink); background: var(--status-starting-soft); border-color: var(--status-starting-line); }
+		.status-badge[data-state="error"] { color: var(--status-error-ink); background: var(--status-error-soft); border-color: var(--status-error-line); }
+		.status-badge[data-state="settled"] { color: var(--status-settled-ink); background: var(--status-settled-soft); border-color: var(--status-settled-line); }
+		.status-badge[data-state="approved"] { color: var(--status-approved-ink); background: var(--status-approved-soft); border-color: var(--status-approved-line); }
+		.status-badge[data-state="interrupted"] { color: var(--status-interrupted-ink); background: var(--status-interrupted-soft); border-color: var(--status-interrupted-line); }
+		.status-badge[data-state="idle"],
+		.status-badge[data-state="stopped"] { color: var(--status-idle-ink); background: var(--status-idle-soft); border-color: var(--status-idle-line); }
 		.task-block {
 			max-width: 72ch;
 			margin: 0;
@@ -524,9 +557,19 @@
 			padding: 0.05em 0.3em;
 		}
 		.task-block ul,
-		.assistant-output ul {
+		.task-block ol,
+		.assistant-output ul,
+		.assistant-output ol {
 			margin: 0.4em 0;
 			padding-left: 1.4em;
+		}
+		.task-block blockquote,
+		.assistant-output blockquote {
+			margin: 0.4em 0;
+			padding: var(--space-2xs) var(--space-sm);
+			border-inline-start: var(--rule-focus) solid var(--rule-strong);
+			background: var(--surface-muted);
+			color: var(--ink-soft);
 		}
 		.task-block a,
 		.assistant-output a {
@@ -800,6 +843,17 @@
 			.workbench { border-inline: var(--rule-thin) solid var(--rule); }
 			.summarybar { border-inline: var(--rule-thin) solid var(--summary-rule); }
 		}
+		@media (prefers-reduced-motion: no-preference) {
+			@keyframes badge-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
+			@keyframes badge-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+			@keyframes badge-alert { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.22); } }
+			@keyframes badge-pop { 0% { transform: scale(0.55); } 55% { transform: scale(1.18); } 100% { transform: scale(1); } }
+			.status-badge[data-state="running"]::before { animation: badge-breathe 2s ease-in-out infinite; }
+			.status-badge[data-state="starting"]::before,
+			.status-badge[data-state="retry"]::before { animation: badge-blink 1.5s ease-in-out infinite; }
+			.status-badge[data-state="error"]::before { animation: badge-alert 2.5s ease-in-out infinite; }
+			.status-badge[data-state="settled"]::before { animation: badge-pop 420ms var(--ease-out) 2; }
+		}
 		@media (prefers-reduced-motion: reduce) {
 			*, *::before, *::after {
 				scroll-behavior: auto !important;
@@ -858,7 +912,7 @@
 							<h1 id="selected-name">—</h1>
 							<p id="selected-role">—</p>
 						</div>
-						<div id="selected-status" class="selected-status" data-state="idle">等待</div>
+						<div id="selected-status" class="status-badge" data-state="idle">等待</div>
 					</div>
 					<div id="selected-task" class="task-block"><strong>任务：</strong>等待接收。</div>
 				</header>
@@ -1079,7 +1133,8 @@
 					name.textContent = member.id;
 					role.className = "member-role";
 					role.textContent = member.role || member.model;
-					state.className = "member-state";
+					state.className = "member-state status-badge status-badge-sm";
+					state.dataset.state = statusKey(member.status);
 					state.textContent = statusLabel(member.status);
 					copy.append(name, role);
 					const contextUsage = member.usage;
@@ -1188,6 +1243,7 @@
 				const root = document.createElement("div");
 				let pre = null;
 				let list = null;
+				let quote = null;
 				let para = null;
 				const flushPara = () => {
 					if (para) {
@@ -1200,6 +1256,7 @@
 					if (fence) {
 						flushPara();
 						list = null;
+						quote = null;
 						if (pre) {
 							pre = null; // closing fence; the block is already mounted
 						} else {
@@ -1220,31 +1277,72 @@
 					if (!trimmed) {
 						flushPara();
 						list = null;
+						quote = null;
 						continue;
 					}
 					const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
 					if (heading) {
 						flushPara();
 						list = null;
+						quote = null;
 						const h = document.createElement(`h${heading[1].length}`);
 						appendInline(h, heading[2]);
 						root.append(h);
 						continue;
 					}
-					const item = /^[-*]\s+(.*)$/.exec(trimmed);
-					if (item) {
+					let envelope = false;
+					if (trimmed.startsWith("{") && trimmed.endsWith("}") && trimmed.includes("agent_team_report")) {
+						try {
+							JSON.parse(trimmed); // only parseable single-line JSON renders as a code block
+							envelope = true;
+						} catch {
+							envelope = false;
+						}
+					}
+					if (envelope) {
 						flushPara();
-						if (!list) {
-							list = document.createElement("ul");
+						list = null;
+						quote = null;
+						const envelopePre = document.createElement("pre");
+						const envelopeCode = document.createElement("code");
+						envelopeCode.className = "lang-json"; // fixed literal, no user input in class
+						envelopeCode.textContent = trimmed;
+						envelopePre.append(envelopeCode);
+						root.append(envelopePre);
+						continue;
+					}
+					const olItem = /^(\d+)[.)]\s+(.*)$/.exec(trimmed);
+					const item = olItem ? null : /^[-*]\s+(.*)$/.exec(trimmed);
+					if (olItem || item) {
+						flushPara();
+						quote = null;
+						const ordered = Boolean(olItem);
+						if (!list || list.tagName !== (ordered ? "OL" : "UL")) {
+							list = document.createElement(ordered ? "ol" : "ul");
+							if (ordered) list.start = Number(olItem[1]); // keep source numbering on newly created lists only
 							root.append(list);
 						}
 						const li = document.createElement("li");
-						appendInline(li, item[1]);
+						appendInline(li, olItem ? olItem[2] : item[1]);
 						list.append(li);
 						continue;
 					}
+					const quoted = /^>\s?(.*)$/.exec(trimmed);
+					if (quoted) {
+						flushPara();
+						list = null;
+						if (!quote) {
+							quote = document.createElement("blockquote");
+							root.append(quote);
+						}
+						if (quote.childNodes.length > 0) quote.append(document.createTextNode("\n"));
+						appendInline(quote, quoted[1]);
+						continue;
+					}
 					// consecutive text lines merge into one paragraph (soft break);
-					// only blank lines, headings, lists, and fences start a new block
+					// only blank lines, headings, quotes, lists, envelopes, and fences start a new block
+					quote = null;
+					list = null; // plain prose terminates the current list
 					if (!para) para = document.createElement("p");
 					if (para.childNodes.length > 0) para.append(document.createTextNode("\n"));
 					appendInline(para, trimmed);
@@ -1463,6 +1561,7 @@
 						// and reconnects cannot leave the page behind.
 						member.assistant = event.text;
 						member.assistantStarted = true;
+						addActivity(member, "本轮输出完成", `${event.text.length} chars`);
 						break;
 					case "status":
 						if (member.status !== event.status) addActivity(member, `状态 · ${statusLabel(event.status)}`, event.status);

@@ -1482,7 +1482,7 @@ export class TeamRuntime {
 			packets.set(task.id, packet);
 			const prompt = [
 				`Execute planned task ${task.id}, attempt ${task.attempt + 1}. The runtime TeamState and this TaskPacket are authoritative; do not consult legacy shared coordination files.`,
-				JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packet }, null, 2),
+				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packet }, null, 2) + "\n```",
 				task.status === "FIX_REQUIRED" ? `Reviewer fix_prompt (execute verbatim, do not broaden scope):\n${task.fixPrompt ?? ""}` : "",
 				packet.outputContract,
 			].filter(Boolean).join("\n\n");
@@ -1527,7 +1527,7 @@ export class TeamRuntime {
 			: undefined;
 		const prompt = [
 			`Review planned tasks in ReviewRound ${roundId}. You are the only role authorized to decide VERIFIED or FIX_REQUIRED. Do not modify deliverables.`,
-			JSON.stringify({
+			"```json\n" + JSON.stringify({
 				reviewRoundId: roundId,
 				targets: targets.map((task) => ({
 					taskId: task.id,
@@ -1536,7 +1536,7 @@ export class TeamRuntime {
 					submission: { summary: task.lastSummary, evidence: task.lastEvidence, outputPath: task.outputPath },
 				})),
 				...(finalAcceptance ? { globalAcceptance: finalAcceptance } : {}),
-			}, null, 2),
+			}, null, 2) + "\n```",
 			'End with one single-line JSON object: {"agent_team_report":{"type":"review","reviewRoundId":"<id>","summary":"...","evidence":["..."],"requests":[],"decisions":[{"taskId":"<id>","verdict":"VERIFIED|FIX_REQUIRED","fix_prompt":"required only for FIX_REQUIRED"}]}}',
 		].join("\n\n");
 		return {
@@ -1586,7 +1586,7 @@ export class TeamRuntime {
 		});
 		const prompt = [
 			`Perform read-only ${kind} ExpertRound ${roundId}. Do not modify deliverables and do not change task verification state.`,
-			JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2),
+			"```json\n" + JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2) + "\n```",
 			'End with one single-line JSON object: {"agent_team_report":{"type":"expert","expertRoundId":"<id>","summary":"...","evidence":["..."],"requests":[]}}',
 		].join("\n\n");
 		return {
