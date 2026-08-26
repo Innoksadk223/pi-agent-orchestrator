@@ -23,7 +23,10 @@ description: Use when the main Pi needs persistent multi-agent execution for a c
 调用 `agent_team plan` 一次提交：
 
 - 完整固定 roster；每个成员有 `kind`、`id`、`role`、`instructions`，模型/思考默认继承主 Pi；
+- **每个成员的 `instructions` 必须是一份专门的专业角色书**，禁止一句话敷衍。写清五要素：职责与专长、边界（不碰什么/不决策什么）、行事风格、输出要求、与其他成员的协作关系；用用户的语言书写；
+- `instructions` 经 `--append-system-prompt` 原样注入成员进程，是该成员唯一的人格来源；修订已建会话成员的 instructions 会被旧历史压制，需换替补才干净生效（见 Settled JSON Contract 节末）；
 - 唯一 `reviewerId`；
+- 计划载荷中面向用户的业务文本（role、instructions、objective、constraints、acceptance 等）一律用简体中文书写，便于用户审阅确认门；runtime 结构标签（Team/Roster/Tasks/depends/acceptance）保持英文不动。
 - ExecutionTask DAG：`id/memberId/dependsOn`；
 - 具体 cwd 相对 `ownedPaths`，以及 objective、constraints、acceptance、relevantPaths、output contract；
 - 全局 acceptance。
