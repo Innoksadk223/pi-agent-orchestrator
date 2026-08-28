@@ -403,7 +403,7 @@ function hasConfig(input: MemberInput): boolean {
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const EVIDENCE_GUIDELINE =
-	'evidence 元素只写纯中文的路径/行号描述（如 src/a.ts:42，用正斜杠 /）；禁止反斜杠、禁止贴代码片段、禁止照抄示例内容（flash 会复制示例代码导致 REPORT_INVALID）。';
+	'envelope 必须是回复的最后一个非空行，裸的单行 JSON 对象；禁止代码围栏/```、禁止 Markdown 包裹、禁止正文后留空行或注释。evidence 元素只写纯中文的路径/行号描述，必须用 path:line 冒号格式（如 src/a.ts:42，用正斜杠 /），禁止散文式「第 N 行」写法、禁止反斜杠、禁止贴代码片段、禁止照抄示例内容（flash 会复制示例代码或围栏导致 REPORT_INVALID）。';
 const DEFAULT_EXECUTION_OUTPUT_CONTRACT =
 	'End the final response with one single-line JSON object: {"agent_team_report":{"type":"execution","taskId":"<id>","status":"SUBMITTED|BLOCKED","summary":"...","evidence":["..."],"requests":[{"kind":"question|scope|dependency|human","text":"..."}]}}';
 

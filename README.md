@@ -94,7 +94,7 @@ Expert：
 {"agent_team_report":{"type":"expert","expertRoundId":"opt-1","summary":"无低风险候选","evidence":[],"requests":[]}}
 ```
 
-字段、条数和长度有上限。缺失、损坏、越界、类型/ID 不匹配时进入 `REPORT_INVALID`；execution ownership 不释放，不自动重试。正文保留在 child Session，超过 50KB 才写 `members/<id>/output.md`。`evidence` 数组元素只写纯中文路径/行号描述（如 `src/a.ts:42`，正斜杠），禁止反斜杠、代码片段与示例照抄。
+字段、条数和长度有上限。缺失、损坏、越界、类型/ID 不匹配时进入 `REPORT_INVALID`；execution ownership 不释放，不自动重试。正文保留在 child Session，超过 50KB 才写 `members/<id>/output.md`。`evidence` 数组元素只写纯中文路径/行号描述，必须用 `path:line` 冒号格式（如 `src/a.ts:42`，正斜杠），禁止散文式「第 N 行」、反斜杠、代码片段与示例照抄；envelope 必须是最后一个非空行、裸单行 JSON，禁止代码围栏。
 
 Coder 只能令任务进入 `SUBMITTED/BLOCKED/REPORT_INVALID`。只有计划指定 Reviewer 的合法 ReviewRound 能写 `VERIFIED/FIX_REQUIRED`。`FIX_REQUIRED` 保存原 `fix_prompt`，下一次 `run(taskId)` 是同一 ExecutionTask 的新 attempt；不创建修复任务，不做 plan amendment。只有 `VERIFIED/CANCELED` 释放 ownership，`VERIFIED` 会使依赖节点转为 `READY`。
 

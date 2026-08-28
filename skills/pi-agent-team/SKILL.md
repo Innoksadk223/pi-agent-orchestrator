@@ -90,7 +90,7 @@ Expert：
 
 Execution 不能自报 VERIFIED。Envelope 缺失/损坏/越界进入 `REPORT_INVALID`，保留正文与锁，通知 Leader；不自然语言猜测、不自动重试。所有协作请求随 envelope 交 Leader，成员之间没有直接 RPC 或文件通信。
 
-Evidence 内容规范（写入每个 dispatch prompt 的硬约束）：`evidence` 数组元素只写纯中文的路径/行号描述（如 `src/a.ts:42`，一律用正斜杠 `/`）；禁止反斜杠、禁止贴 Swift 或其他代码片段、禁止照抄示例内容。flash 类小模型会复制示例代码，违反即 `REPORT_INVALID`。
+Evidence 内容规范（写入每个 dispatch prompt 的硬约束）：`evidence` 数组元素只写纯中文的路径/行号描述，必须用 `path:line` 冒号格式（如 `src/a.ts:42`，一律用正斜杠 `/`），禁止散文式「第 N 行」写法；禁止反斜杠、禁止贴 Swift 或其他代码片段、禁止照抄示例内容。envelope 必须是最后一个非空行、裸的单行 JSON：禁止代码围栏/```，禁止 Markdown 包裹，正文后不留空行或注释。flash 类小模型会复制示例代码或围栏，违反即 `REPORT_INVALID`。
 
 成员会话按 sessionId 复用：修订 instructions 后旧历史仍主导输出，重发同样 prompt 大概率复现同一错误。标准恢复流程：连续 REPORT_INVALID（或明显被旧上下文污染）时 kill 舍弃该成员，amendment 新增替补（新 sessionId + 新指令）并把 reviewerId/任务派发切过去；旧成员保留名册闲置。不要反复重试同一成员。
 
