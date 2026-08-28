@@ -90,6 +90,8 @@ Expert：
 
 Execution 不能自报 VERIFIED。Envelope 缺失/损坏/越界进入 `REPORT_INVALID`，保留正文与锁，通知 Leader；不自然语言猜测、不自动重试。所有协作请求随 envelope 交 Leader，成员之间没有直接 RPC 或文件通信。
 
+Evidence 内容规范（写入每个 dispatch prompt 的硬约束）：`evidence` 数组元素只写纯中文的路径/行号描述（如 `src/a.ts:42`，一律用正斜杠 `/`）；禁止反斜杠、禁止贴 Swift 或其他代码片段、禁止照抄示例内容。flash 类小模型会复制示例代码，违反即 `REPORT_INVALID`。
+
 成员会话按 sessionId 复用：修订 instructions 后旧历史仍主导输出，重发同样 prompt 大概率复现同一错误。标准恢复流程：连续 REPORT_INVALID（或明显被旧上下文污染）时 kill 舍弃该成员，amendment 新增替补（新 sessionId + 新指令）并把 reviewerId/任务派发切过去；旧成员保留名册闲置。不要反复重试同一成员。
 
 ## 状态与恢复
@@ -101,7 +103,11 @@ Execution 不能自报 VERIFIED。Envelope 缺失/损坏/越界进入 `REPORT_IN
 - `kill`：终止 child；活动 execution attempt 取消，授权与 Session UUID 保留。
 - `set-model {member:{id,model,thinking?}}`：模型与可选思考程度走同一后端；live child 切换后核对两字段，不一致保持旧持久配置，无 live child 则下次 run 生效。Dashboard 的唯一控制是两个选择器和一个应用按钮，一次提交 model+thinking。
 
-TeamState 是唯一结构化事实源。恢复时先 `status`，行动前由 runtime 再校验实时状态；中断、provider 错误、REPORT_INVALID 或原生压缩/会话失败都表现为既有状态，由 Leader显式选择重试、修复、换成员（需 amendment）或停问用户。
+TeamState 是唯一结构化事实源。恢复时先 `status`，行动前由 runtime 再校验实时状态；中断、provider 错误、REPORT_INVALID 或原生压缩/会话失败都表现为既有状态，由 Leader显式选择重试、修复、换成员（需 amendment）或停问用户。`REPORT_INVALID` 一律按原任务重派核对（`run` 同一 taskId，新 attempt），不得从正文推断成功或跳过核对。
+
+上游 provider 间歇故障（opencode-go 等上游的 `network_error` / HTTP 400 `invalid_encrypted_content`）不属于成员过错：串行重派同一任务逐个尝试，不并行轰炸、不擅自换模型、不换 provider 绕路；连续重派仍失败才停问用户。
+
+成员固定 400 先查 maxTokens：`~/.pi/agent/models.json` 的 provider `modelOverrides` 里 maxTokens 超过上游限额（如 384000 > 131072）会固定 400；不要直接改 `models-store.json` 缓存（每 4 小时被上游刷新覆盖），持久修法是写 `models.json` 覆盖。
 
 ## 文件与上下文
 

@@ -402,6 +402,8 @@ function hasConfig(input: MemberInput): boolean {
 }
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+const EVIDENCE_GUIDELINE =
+	'evidence 元素只写纯中文的路径/行号描述（如 src/a.ts:42，用正斜杠 /）；禁止反斜杠、禁止贴代码片段、禁止照抄示例内容（flash 会复制示例代码导致 REPORT_INVALID）。';
 const DEFAULT_EXECUTION_OUTPUT_CONTRACT =
 	'End the final response with one single-line JSON object: {"agent_team_report":{"type":"execution","taskId":"<id>","status":"SUBMITTED|BLOCKED","summary":"...","evidence":["..."],"requests":[{"kind":"question|scope|dependency|human","text":"..."}]}}';
 
@@ -1485,6 +1487,7 @@ export class TeamRuntime {
 				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packet }, null, 2) + "\n```",
 				task.status === "FIX_REQUIRED" ? `Reviewer fix_prompt (execute verbatim, do not broaden scope):\n${task.fixPrompt ?? ""}` : "",
 				packet.outputContract,
+				EVIDENCE_GUIDELINE,
 			].filter(Boolean).join("\n\n");
 			return { member: { id: task.memberId }, task: prompt, target: { team: teamId, type: "execution", id: task.id } };
 		});
@@ -1538,6 +1541,7 @@ export class TeamRuntime {
 				...(finalAcceptance ? { globalAcceptance: finalAcceptance } : {}),
 			}, null, 2) + "\n```",
 			'End with one single-line JSON object: {"agent_team_report":{"type":"review","reviewRoundId":"<id>","summary":"...","evidence":["..."],"requests":[],"decisions":[{"taskId":"<id>","verdict":"VERIFIED|FIX_REQUIRED","fix_prompt":"required only for FIX_REQUIRED"}]}}',
+			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {
 			tasks: [{ member: { id: reviewer.id }, task: prompt, target: { team: teamId, type: "review", id: roundId } }],
@@ -1588,6 +1592,7 @@ export class TeamRuntime {
 			`Perform read-only ${kind} ExpertRound ${roundId}. Do not modify deliverables and do not change task verification state.`,
 			"```json\n" + JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2) + "\n```",
 			'End with one single-line JSON object: {"agent_team_report":{"type":"expert","expertRoundId":"<id>","summary":"...","evidence":["..."],"requests":[]}}',
+			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {
 			tasks: [{ member: { id: expert.id }, task: prompt, target: { team: teamId, type: "expert", id: roundId } }],
