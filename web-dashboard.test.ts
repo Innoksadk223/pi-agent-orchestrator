@@ -113,6 +113,9 @@ class FakeClient implements RpcClientLike {
 	// Per-turn assistant text (S2-7 baseline): when set, turn N reports roundOutputs[N-1]
 	// instead of the single `output` value, so multi-round tests can simulate new text.
 	roundOutputs?: string[];
+	// undefined follows the RPC state model; null emits assistant metadata without
+	// provider/model so strict first-response verification can be exercised.
+	responseModel?: string | null;
 	private idleBlocked = false;
 	private turns = 0;
 	readonly order: string[];
@@ -143,6 +146,18 @@ class FakeClient implements RpcClientLike {
 		await this.promptGate?.();
 		if (this.promptError) throw this.promptError;
 		this.turns++;
+		const responseModel = this.responseModel === undefined ? this.stateModel : this.responseModel;
+		const slash = responseModel?.indexOf("/") ?? -1;
+		this.emit({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				...(responseModel && slash > 0
+					? { provider: responseModel.slice(0, slash), model: responseModel.slice(slash + 1) }
+					: {}),
+				stopReason: "stop",
+			},
+		});
 		if (!this.idleBlocked) this.emit({ type: "agent_settled" });
 	}
 	async waitForIdle(timeout?: number): Promise<void> {
@@ -219,6 +234,8 @@ class FakeCompatibility implements CompatibilityPort {
 	stateThinkingLevel?: string;
 	ignoreModelUpdates = false;
 	ignoreThinkingUpdates = false;
+	responseModel?: string | null;
+	membersSeen: any[] = [];
 
 	readonly order: string[];
 
@@ -237,6 +254,7 @@ class FakeCompatibility implements CompatibilityPort {
 	}
 	async createMemberClient(member: any): Promise<any> {
 		this.createCalls++;
+		this.membersSeen.push(structuredClone(member));
 		this.instructionsSeen.push(member.instructions);
 		this.toolsSeen.push([...member.tools]);
 		const client = new FakeClient(member.sessionId, this.order);
@@ -251,6 +269,7 @@ class FakeCompatibility implements CompatibilityPort {
 		client.stateThinkingLevel = this.stateThinkingLevel ?? member.thinking;
 		client.ignoreModelUpdates = this.ignoreModelUpdates;
 		client.ignoreThinkingUpdates = this.ignoreThinkingUpdates;
+		client.responseModel = this.responseModel;
 		if (this.blockIdle) client.blockUntilIdle();
 		this.clients.push(client);
 		return { client, cleanupPrompt: async () => undefined };
@@ -1500,6 +1519,189 @@ test("planned workspace is minimal and only Pi native auto-compaction remains wi
 	assert.deepEqual(client.setAutoCompactionCalls, [true]);
 	assert.equal(client.manualCompactionCalls.length, 0, "settled runs never invoke orchestrator-side compaction");
 	assert.deepEqual(await readdir(join(workspace, "members", "coder-a")), ["identity.md"]);
+});
+
+test("four explicit canonical models remain distinct in state and client creation", async () => {
+	const models = ["alpha/a", "beta/b", "gamma/c", "delta/d"];
+	const plan: PlanInput = {
+		members: [
+			{ id: "coder-a", kind: "coder", role: "Coder A", instructions: "Implement A.", model: models[0] },
+			{ id: "coder-b", kind: "coder", role: "Coder B", instructions: "Implement B.", model: models[1] },
+			{ id: "coder-c", kind: "coder", role: "Coder C", instructions: "Implement C.", model: models[2] },
+			{ id: "reviewer", kind: "reviewer", role: "Reviewer", instructions: "Review only.", model: models[3], tools: ["read"] },
+		],
+		reviewerId: "reviewer",
+		tasks: [
+			{ id: "task-a", memberId: "coder-a", objective: "A", ownedPaths: ["src/a"], acceptance: ["A done"] },
+			{ id: "task-b", memberId: "coder-b", objective: "B", ownedPaths: ["src/b"], acceptance: ["B done"] },
+			{ id: "task-c", memberId: "coder-c", objective: "C", ownedPaths: ["src/c"], acceptance: ["C done"] },
+		],
+		acceptance: ["All done"],
+	};
+	const compatibility = new FakeCompatibility();
+	for (const taskId of ["task-a", "task-b", "task-c"]) {
+		compatibility.outputsByMember[`coder-${taskId.at(-1)}`] = executionReport(taskId);
+	}
+	compatibility.outputsByMember.reviewer = reviewReport("review-models", [
+		{ taskId: "task-a", verdict: "VERIFIED" },
+		{ taskId: "task-b", verdict: "VERIFIED" },
+		{ taskId: "task-c", verdict: "VERIFIED" },
+	]);
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `model-session-${++uuid}`, () => new FakeDashboard());
+	const ctx = context({
+		model: { provider: "root", id: "main" },
+		listModels: () => models.map((value) => {
+			const slash = value.indexOf("/");
+			return { provider: value.slice(0, slash), id: value.slice(slash + 1) };
+		}),
+	});
+	await registerPlan(runtime, ctx, plan);
+	assert.deepEqual(
+		Object.values(runtime.getState().teams.default.members).map((member) => `${member.model.provider}/${member.model.id}`),
+		models,
+	);
+	await runtime.execute({ action: "parallel", taskIds: ["task-a", "task-b", "task-c"], background: false }, ctx);
+	await runtime.execute({ action: "review", reviewRoundId: "review-models", taskIds: ["task-a", "task-b", "task-c"], background: false }, ctx);
+	assert.deepEqual(
+		Object.fromEntries(compatibility.membersSeen.map((member) => [member.id, `${member.model.provider}/${member.model.id}`])),
+		{ "coder-a": models[0], "coder-b": models[1], "coder-c": models[2], reviewer: models[3] },
+	);
+});
+
+test("invalid explicit plan model fails before every observable side effect", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-agent-team-invalid-model-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const compatibility = new FakeCompatibility();
+	let uuid = 0;
+	let dashboardCreates = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `invalid-session-${++uuid}`, () => {
+		dashboardCreates++;
+		return new FakeDashboard();
+	});
+	const ctx = context({
+		cwd: dir,
+		listModels: () => [{ provider: "valid", id: "model" }],
+	});
+	const plan: PlanInput = {
+		members: [
+			{ id: "coder-a", kind: "coder", role: "Coder", instructions: "Code.", model: "missing/model" },
+			{ id: "reviewer", kind: "reviewer", role: "Reviewer", instructions: "Review.", tools: ["read"] },
+		],
+		reviewerId: "reviewer",
+		tasks: [{ id: "task-a", memberId: "coder-a", objective: "A", ownedPaths: ["src/a"], acceptance: ["Done"] }],
+		acceptance: ["Done"],
+	};
+	await assert.rejects(runtime.execute({ action: "plan", plan }, ctx), /Member coder-a requested unavailable model missing\/model.*no exact canonical/u);
+	assert.deepEqual(runtime.getState().teams, {});
+	assert.equal(uuid, 0);
+	assert.equal(ctx.snapshots.length, 0);
+	assert.equal(compatibility.createCalls, 0);
+	assert.equal(dashboardCreates, 0);
+	await assert.rejects(stat(join(dir, ".pi", "agent-team", "default")), /ENOENT/u);
+});
+
+test("new member omission inherits parent while amendment omission preserves switched model", async () => {
+	const compatibility = new FakeCompatibility();
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `inherit-session-${++uuid}`, () => new FakeDashboard());
+	const ctx = context({
+		listModels: () => [
+			{ provider: "test", id: "model" },
+			{ provider: "test", id: "other" },
+		],
+	});
+	await registerPlan(runtime, ctx);
+	assert.equal(runtime.getState().teams.default.members["coder-a"].model.id, "model");
+	await runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/other" } }, ctx);
+	await runtime.execute({ action: "plan", expectedRevision: 1, plan: PLAN }, ctx);
+	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
+	assert.equal(runtime.getState().teams.default.plan?.revision, 2);
+});
+
+test("tool and Dashboard reject model changes while a member is active", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.blockIdle = true;
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `active-session-${++uuid}`, () => new FakeDashboard());
+	const ctx = context({
+		listModels: () => [
+			{ provider: "test", id: "model" },
+			{ provider: "test", id: "other" },
+		],
+	});
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: true }, ctx);
+	await waitFor(() => runtime.getState().teams.default.members["coder-a"].status === "RUNNING");
+	await assert.rejects(
+		runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/other", thinking: "high" } }, ctx),
+		/call stop first/u,
+	);
+	await assert.rejects(runtime.setModelFromDashboard("default", "coder-a", "test/other", "high", ctx), /call stop first/u);
+	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "model" });
+	assert.equal(runtime.getState().teams.default.members["coder-a"].thinking, "medium");
+	await runtime.execute({ action: "stop", member: { id: "coder-a" } }, ctx);
+});
+
+test("idle live switch persists only after model and thinking RPC verification", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `switch-session-${++uuid}`, () => new FakeDashboard());
+	const ctx = context({
+		listModels: () => [
+			{ provider: "test", id: "model" },
+			{ provider: "test", id: "other" },
+		],
+	});
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	await runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/other", thinking: "high" } }, ctx);
+	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
+	assert.equal(runtime.getState().teams.default.members["coder-a"].thinking, "high");
+	compatibility.clients[0].ignoreModelUpdates = true;
+	await assert.rejects(
+		runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/model", thinking: "low" } }, ctx),
+		/verification failed/u,
+	);
+	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
+	assert.equal(runtime.getState().teams.default.members["coder-a"].thinking, "high");
+});
+
+test("child startup requires an observable exact model before prompt", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.stateModel = "";
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `startup-session-${++uuid}`, () => new FakeDashboard());
+	const ctx = context();
+	await registerPlan(runtime, ctx);
+	await assert.rejects(runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx), /Child model mismatch: expected test\/model, got <missing>/u);
+	assert.equal(compatibility.clients[0].promptCalls.length, 0);
+	assert.equal(runtime.getState().teams.default.members["coder-a"].status, "ERROR");
+	assert.equal(runtime.getState().teams.default.executionTasks["task-a"].status, "READY");
+});
+
+test("first assistant model mismatch or missing metadata fails without replay", async (t) => {
+	for (const [label, responseModel] of [["mismatch", "other/model"], ["missing", null]] as const) {
+		await t.test(label, async () => {
+			const compatibility = new FakeCompatibility();
+			compatibility.responseModel = responseModel;
+			compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+			let uuid = 0;
+			const runtime = new TeamRuntime(compatibility, () => NOW, () => `${label}-session-${++uuid}`, () => new FakeDashboard());
+			const ctx = context();
+			await registerPlan(runtime, ctx);
+			await assert.rejects(runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx), /First assistant response model mismatch/u);
+			const team = runtime.getState().teams.default;
+			assert.equal(team.members["coder-a"].status, "ERROR");
+			assert.equal(team.executionTasks["task-a"].status, "BLOCKED");
+			assert.match(team.executionTasks["task-a"].lastIssue ?? "", /Prompt accepted; not replayed/u);
+			assert.equal(compatibility.clients[0].promptCalls.length, 1);
+			assert.equal(compatibility.clients[0].stopCalls, 1);
+		});
+	}
 });
 
 test("inline markdown renderer keeps fences, envelopes, list numbering, and quotes", async () => {

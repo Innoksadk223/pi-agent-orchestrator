@@ -347,6 +347,7 @@ export function parseModel(value: string | undefined, fallback?: ModelRef): Mode
 export function normalizeNewMember(
 	input: MemberInput,
 	defaults: RuntimeContext,
+	currentModel?: ModelRef,
 ): MemberConfig {
 	if (!input.role || !input.instructions) {
 		throw new TeamInputError("A new member requires id, role, and instructions.");
@@ -357,29 +358,44 @@ export function normalizeNewMember(
 		id: input.id,
 		role: input.role,
 		instructions: input.instructions,
-		// 模型继承：未填 → 继承主 PI 当前模型；填了但不在主 PI 可用列表
-		// （模型照抄 schema 示例/乱填，如示例中的 claude）→ 回退继承主 PI 模型，
-		// 防止成员以不可用模型启动失败；填了且可用（用户明确指定）→ 尊重。
-		model: pickMemberModel(input.model, defaults),
+		// New members inherit the parent model only when model is omitted. Existing
+		// members keep their persisted model across unrelated plan amendments.
+		model: pickMemberModel(input.model, defaults, input.id, currentModel),
 		// 思考等级：未填 → 继承主 PI 当前思考等级（defaults.thinking）。
 		thinking: input.thinking ?? defaults.thinking ?? "medium",
 		tools,
 	};
 }
 
-function pickMemberModel(value: string | undefined, ctx: RuntimeContext): ModelRef {
-	if (!value) return parseModel(undefined, ctx.model);
-	const requested = parseModel(value, ctx.model);
-	if (ctx.model && !isModelAvailable(requested, ctx)) {
-		return ctx.model;
+function pickMemberModel(
+	value: string | undefined,
+	ctx: RuntimeContext,
+	memberId: string,
+	currentModel?: ModelRef,
+): ModelRef {
+	if (!value) return parseModel(undefined, currentModel ?? ctx.model);
+	let requested: ModelRef;
+	try {
+		requested = parseModel(value);
+	} catch (error) {
+		throw new TeamInputError(
+			`Member ${memberId} requested model ${JSON.stringify(value)}, but it is not a canonical provider/model: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const reason = modelUnavailableReason(requested, ctx);
+	if (reason) {
+		throw new TeamInputError(`Member ${memberId} requested unavailable model ${value}: ${reason}. Explicit models are never replaced by the parent model.`);
 	}
 	return requested;
 }
 
-function isModelAvailable(model: ModelRef, ctx: RuntimeContext): boolean {
+function modelUnavailableReason(model: ModelRef, ctx: RuntimeContext): string | undefined {
 	const available = ctx.listModels?.();
-	if (!available || available.length === 0) return true; // 无模型目录时不强校验（headless）
-	return available.some((m) => m.provider === model.provider && m.id === model.id);
+	if (!available) return "the main Pi available-model catalogue is unavailable";
+	if (available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) return undefined;
+	return available.length === 0
+		? "the main Pi available-model catalogue is empty"
+		: "no exact canonical provider/model match exists in the main Pi available-model catalogue";
 }
 
 export function configHash(config: MemberConfig): string {
@@ -468,7 +484,12 @@ export interface PreparedPlan {
 	reviewerId: string;
 }
 
-function preparePlan(input: PlanInput, ctx: RuntimeContext, now: string): PreparedPlan {
+function preparePlan(
+	input: PlanInput,
+	ctx: RuntimeContext,
+	now: string,
+	currentMembers: Record<string, MemberState> = {},
+): PreparedPlan {
 	const configs: Record<string, MemberConfig> = {};
 	const memberKinds: Record<string, PlanMemberKind> = {};
 	for (const member of input.members) {
@@ -477,7 +498,7 @@ function preparePlan(input: PlanInput, ctx: RuntimeContext, now: string): Prepar
 		if (member.kind !== "coder" && (!member.tools?.length || member.tools.some((tool) => tool === "edit" || tool === "write" || tool === "agent_team"))) {
 			throw new TeamInputError(`Planned ${member.kind} member ${member.id} requires an explicit tool list without edit/write/agent_team.`);
 		}
-		configs[member.id] = normalizeNewMember(member, ctx);
+		configs[member.id] = normalizeNewMember(member, ctx, currentMembers[member.id]?.model);
 		memberKinds[member.id] = member.kind;
 	}
 	if (!configs[input.reviewerId] || memberKinds[input.reviewerId] !== "reviewer") {
@@ -911,6 +932,14 @@ export interface RuntimeToolResult {
 
 function memberKey(team: string, id: string): string {
 	return `${team}\u0000${id}`;
+}
+
+function assistantMessageModel(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const record = message as Record<string, unknown>;
+	return record.role === "assistant" && typeof record.provider === "string" && typeof record.model === "string"
+		? `${record.provider}/${record.model}`
+		: undefined;
 }
 
 function assistantFailure(event: any): string | undefined {
@@ -1808,7 +1837,7 @@ export class TeamRuntime {
 			throw new TeamInputError(`Team ${teamId} has active members; plan changes require an idle team.`);
 		}
 		const now = this.now();
-		const prepared = preparePlan(input, ctx, now);
+		const prepared = preparePlan(input, ctx, now, current?.members);
 		if (current) {
 			for (const id of Object.keys(current.members)) {
 				if (!prepared.configs[id]) throw new TeamInputError(`Plan registration/amendment may not remove existing member ${id}.`);
@@ -2180,6 +2209,7 @@ export class TeamRuntime {
 		let client: RpcClientLike | undefined;
 		let accepted = false;
 		let responseError: string | undefined;
+		let firstAssistantChecked = false;
 		let unsubscribe: (() => void) | undefined;
 		let abortListener: (() => void) | undefined;
 		let settleWait: SettledIdleWait | undefined;
@@ -2269,7 +2299,15 @@ export class TeamRuntime {
 			view?.write({ type: "status", status: "RUNNING" });
 			unsubscribe = client.onEvent((event) => {
 				if (event?.type === "message_end" && event.message?.role === "assistant") {
-					responseError = assistantFailure(event);
+					if (!firstAssistantChecked) {
+						firstAssistantChecked = true;
+						const expected = `${member.model.provider}/${member.model.id}`;
+						const actual = assistantMessageModel(event.message);
+						if (actual !== expected) {
+							responseError = `First assistant response model mismatch: expected ${expected}, got ${actual ?? "<missing>"}.`;
+						}
+					}
+					responseError ??= assistantFailure(event);
 				}
 				for (const dashboardEvent of dashboardEventsFromRpc(event)) view?.write(dashboardEvent);
 				const progress =
@@ -2324,7 +2362,7 @@ export class TeamRuntime {
 					detached ? undefined : signal,
 					settleWait!,
 					() => interrupted,
-					() => responseError,
+					() => responseError ?? (firstAssistantChecked ? undefined : "First assistant response model metadata was not observed."),
 					item.target,
 					() => {
 						this.runControls.delete(key);
@@ -2676,8 +2714,8 @@ export class TeamRuntime {
 			// on a different model than the one the leader approved.
 			const reported = reportedModel(childState.model);
 			const expected = `${member.model.provider}/${member.model.id}`;
-			if (reported && reported !== expected) {
-				throw new Error(`Child model mismatch: expected ${expected}, got ${reported}.`);
+			if (reported !== expected) {
+				throw new Error(`Child model mismatch: expected ${expected}, got ${reported ?? "<missing>"}.`);
 			}
 			this.clients.set(key, handle.client);
 			// Same race guard: keep STOPPED so runMember's post-start check aborts the
@@ -2902,19 +2940,23 @@ export class TeamRuntime {
 	private async setModelResult(teamId: string, input: MemberInput, ctx: RuntimeContext): Promise<RuntimeToolResult> {
 		const member = this.state.teams[teamId]?.members[input.id];
 		if (!member) throw new TeamInputError(`Unknown member ${teamId}/${input.id}.`);
+		const key = memberKey(teamId, member.id);
+		if (this.active.has(key) || member.status === "STARTING" || member.status === "RUNNING") {
+			throw new TeamInputError(`Cannot switch model for active member ${teamId}/${member.id}; call stop first and wait for the member to become idle.`);
+		}
 		const model = parseModel(input.model);
 		const thinking = input.thinking ?? member.thinking;
 		if (!THINKING_LEVELS.includes(thinking)) {
 			throw new TeamInputError(`set-model thinking must be one of: ${THINKING_LEVELS.join(", ")}.`);
 		}
-		if (!isModelAvailable(model, ctx)) {
+		const unavailable = modelUnavailableReason(model, ctx);
+		if (unavailable) {
 			throw new TeamInputError(
-				`Model ${model.provider}/${model.id} is not in the main Pi's available models; set-model rejected. Use a model from the main Pi's model registry (models.json).`,
+				`Model ${model.provider}/${model.id} is unavailable: ${unavailable}; set-model rejected. Use an exact canonical model from the main Pi registry.`,
 			);
 		}
 		const beforeModel = { ...member.model };
 		const beforeThinking = member.thinking;
-		const key = memberKey(teamId, member.id);
 		const client = this.clients.get(key);
 		const rollbackChild = async (): Promise<string | undefined> => {
 			if (!client) return undefined;

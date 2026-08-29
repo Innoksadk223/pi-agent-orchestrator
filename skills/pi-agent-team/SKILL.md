@@ -22,7 +22,7 @@ description: Use when the main Pi needs persistent multi-agent execution for a c
 
 调用 `agent_team plan` 一次提交：
 
-- 完整固定 roster；每个成员有 `kind`、`id`、`role`、`instructions`，模型/思考默认继承主 Pi；
+- 完整固定 roster；每个成员有 `kind`、`id`、`role`、`instructions`。新成员省略模型时继承主 Pi；只在用户明确指定时填写真实可用目录中的精确 canonical `provider/model`，显式无效值会报错且绝不回退。amendment 中既有成员省略模型会保留其当前持久化选择；
 - **每个成员的 `instructions` 必须是一份专门的专业角色书**，禁止一句话敷衍。写清五要素：职责与专长、边界（不碰什么/不决策什么）、行事风格、输出要求、与其他成员的协作关系；用用户的语言书写；
 - `instructions` 经 `--append-system-prompt` 原样注入成员进程，是该成员唯一的人格来源；修订已建会话成员的 instructions 会被旧历史压制，需换替补才干净生效（见 Settled JSON Contract 节末）；
 - 唯一 `reviewerId`；
@@ -101,7 +101,7 @@ Evidence 内容规范（写入每个 dispatch prompt 的硬约束）：`evidence
 - `wait`：显式收集完整结果；后台 planned completion 已自动发送精简 delta，不轮询。
 - `stop`：软中断，保留 Session/授权，不重放。
 - `kill`：终止 child；活动 execution attempt 取消，授权与 Session UUID 保留。
-- `set-model {member:{id,model,thinking?}}`：模型与可选思考程度走同一后端；live child 切换后核对两字段，不一致保持旧持久配置，无 live child 则下次 run 生效。Dashboard 的唯一控制是两个选择器和一个应用按钮，一次提交 model+thinking。
+- `set-model {member:{id,model,thinking?}}`：只允许空闲成员调用；`STARTING/RUNNING` 必须先 `stop`。模型与可选思考程度走同一后端；live child 切换后核对两字段，不一致保持旧持久配置，无 live child 则下次 run 生效。下一轮首个真实 assistant 回复的 `provider/model` 还必须完全匹配，否则本轮失败、停止不可信 child、绝不自动重放。Dashboard 的唯一控制是两个选择器和一个应用按钮，一次提交 model+thinking，并遵循同一限制。
 
 TeamState 是唯一结构化事实源。恢复时先 `status`，行动前由 runtime 再校验实时状态；中断、provider 错误、REPORT_INVALID 或原生压缩/会话失败都表现为既有状态，由 Leader显式选择重试、修复、换成员（需 amendment）或停问用户。`REPORT_INVALID` 一律按原任务重派核对（`run` 同一 taskId，新 attempt），不得从正文推断成功或跳过核对。
 

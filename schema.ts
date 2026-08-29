@@ -18,7 +18,7 @@ const Member = Type.Object(
 				minLength: 3,
 				maxLength: 200,
 				description:
-					"Leave empty to inherit the main Pi's current model. Only fill when the user explicitly asks for a different member model, using \"provider/model\" form.",
+					"For a new member, leave empty to inherit the main Pi's current model; during an amendment, omission preserves an existing member's persisted model. Only fill when the user explicitly asks for an override, using an exact available canonical \"provider/model\"; invalid explicit values never fall back.",
 			}),
 		),
 		thinking: Type.Optional(

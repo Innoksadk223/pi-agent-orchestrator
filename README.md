@@ -32,7 +32,7 @@ agent_team({
 })
 ```
 
-一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订（指令/任务/验收编辑）与既有成员的持续派发静默复用已批准授权。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
+一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。新成员省略 `model` 时继承主 Pi；只有用户明确要求覆盖时才填写真实可用目录中的精确 canonical `provider/model`，显式无效值会在任何持久化或 child 副作用前报错，绝不回退主模型。amendment 中既有成员省略 `model` 会保留其当前持久化选择，显式填写才切换。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订（指令/任务/验收编辑）与既有成员的持续派发静默复用已批准授权。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
 
 TUI 中该确认使用有界审阅视窗：`Approve` / `Reject` 固定可见，`↑` / `↓` / `PageUp` / `PageDown` 滚动正文，`←` / `→` 或 `Tab` 切换选项，`Enter` 确认当前选中项，`Esc` / `Ctrl+C` 始终拒绝，倒计时归零未操作则默认 Approve；正文为标准 Markdown（节标题/列表/加粗），TUI 端解析为主题色样式，IDE/RPC 端可直接渲染 MD，溢出时右缘显示滚动条。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
 
@@ -124,7 +124,7 @@ Workspace 只维护：
 
 ## Session、Dashboard 与压缩
 
-既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`；live child 依次应用并核对 model/thinking，无 live child 时持久化到下次 run。Dashboard 仍绑定 loopback、只读观察，唯一控制是两个选择器加一个应用按钮，一次提交成员模型与思考程度；plan 注册不启动 Dashboard，实际派工才沿用原准备流程。
+既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`，但只允许成员空闲时调用；`STARTING/RUNNING`（包括 Dashboard 请求）会明确拒绝并要求先 `stop`。空闲 live child 依次应用并核对 model/thinking，任一步失败都回滚且不改持久配置；无 live child 时先持久化，到下次 run 启动核对。每轮首个真实 assistant `message_end` 的 `provider/model` 还必须与目标完全匹配；缺失或不同会停止不可信 child，让任务进入可恢复失败路径，且不自动重放。Dashboard 仍绑定 loopback、只读观察，唯一控制是两个选择器加一个应用按钮，一次提交成员模型与思考程度；plan 注册不启动 Dashboard，实际派工才沿用原准备流程。
 
 成员启动时调用 `setAutoCompaction(true)` 启用 Pi 原生 auto-compaction。orchestrator 不设自定义阈值，不在 settled 后主动调用 compact，也不写压缩交接文件。原生压缩或成员会话失败表现为既有 `ERROR/INTERRUPTED` 状态，不自动重放；由 Leader依据 TeamState 和成员输出决定是否轮换接续。
 
