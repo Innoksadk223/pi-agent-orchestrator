@@ -55,6 +55,11 @@ agent_team({ action: "run", taskId: "implementation" })
 agent_team({ action: "parallel", taskIds: ["a", "b"] })
 agent_team({ action: "review", reviewRoundId: "review-1", taskIds: ["implementation"] })
 agent_team({ action: "expert", expertRoundId: "opt-1", expertId: "optimizer", taskIds: ["implementation"], objective: "检查低风险优化候选" })
+agent_team({ action: "steer", member: { id: "coder" }, message: "只处理本次批准范围" })
+agent_team({ action: "pause", taskId: "implementation" })
+agent_team({ action: "resume", taskId: "implementation" })
+agent_team({ action: "answer-request", requestId: "execution:implementation:1", answer: "包含迁移脚本" })
+agent_team({ action: "resolve-request", requestId: "execution:implementation:1" })
 agent_team({ action: "set-model", member: { id: "coder", model: "provider/model", thinking: "high" } })
 agent_team({ action: "cancel", taskIds: ["dropped"] })
 ```
@@ -71,6 +76,17 @@ agent_team({ action: "cancel", taskIds: ["dropped"] })
 所有新派工都要求已注册 plan。旧 TeamState/成员/Session 仍可通过 `status`、`wait`、`stop`、`kill`、`set-model` 和恢复路径读取使用，但 inline `member + task`、inline `tasks[]` 以及无计划 `run/parallel` 会明确拒绝；runtime 不删除或覆盖旧 workspace 与 Session。
 
 上游 provider 间歇故障（`network_error` / HTTP 400 `invalid_encrypted_content`）不属于成员过错：串行重派同一任务，不并行轰炸、不擅自换模型或换 provider；连续重派仍失败才停问用户。
+
+## 控制面与健康告警
+
+新动作只作用于 Leader 显式指定的对象，全部在副作用前完成校验，绝不自动唤醒、自动派工或自动熔断：
+
+- `steer {member, message}`：对**正在运行**成员注入一条受控短消息（Pi 公开 steer RPC）。不创建任务、不改 owned paths、不触发任何自动 dispatch；client 没有公开 steer 能力时显式拒绝，不伪造冻结 RPC；空闲或不存在成员直接报错。
+- `pause {taskId}`：执行期软中断（与前台 Esc/`stop` 同一 abort 语义）。child client、Session UUID、授权与 Dashboard 全部保留；成员收尾为 `INTERRUPTED`，任务进入 `BLOCKED` 且标注「不重放」。
+- `resume {taskId}`：Leader 显式重新派发**同一任务**的下一 attempt（复用 `run` 的全部 preflight：依赖、owned-path 锁、成员可用性与非法状态拒绝）。已 `SUBMITTED/VERIFIED` 等非法状态会被拒绝；`BLOCKED` 才允许续跑并向目标成员注入一次。
+- `answer-request {requestId, answer}` / `resolve-request {requestId}`：推进成员随报告提交的请求生命周期。请求由成员回报产生 `OPEN`；`answer-request` 只接受 `OPEN`，记录答案后进入 `ANSWERED`，并在**发起成员自身**下一次显式 dispatch 时注入（即使 review/expert 使用了新的 roundId，注入后仍消费为 `RESOLVED`）；`resolve-request` 显式关闭 `OPEN/ANSWERED`，已 `RESOLVED` 拒绝重复操作。旧快照恢复时丢失状态的请求一律回 `OPEN`，绝不凭空判定已答复。
+- 受控消息：成员报告可按 `messages: [{to, text}]` 向**同一已注册计划内**的目标成员发送一次性受控消息，单条 ≤ 1000 字符、每报告 ≤ 5 条、每接收者未送达队列 ≤ 20 条、全局 ≤ 100 条。消息在接收者下一次显式 dispatch 的 prompt 中一次性注入，prompt 被接受才标记 `deliveredAt`；未接受原样保留待下一位 Leader 显式 dispatch，不自动重放；超限与计划外目标被拒绝并保留来源报告供核对。
+- 健康快照：每次成员最终化一次性持久化三层模型证据（配置模型 / child RPC 报告模型 / 首条真实 assistant 回复模型）、最后事件与工具、本轮用量与 Context 占用。固定阈值（连续工具错误、重复同一工具次数、auto-retry 次数）只评估 `NORMAL → ELEVATED → DEGRADED → CRITICAL` 等级并留下原因，在同一成员的历史快照间只升不降、**只告警**——绝不自动 steer/stop/kill，也不触发派发。流式事件不逐条追加 TeamState 快照。
 
 ## 结构化 settled 报告
 
@@ -124,7 +140,7 @@ Workspace 只维护：
 
 ## Session、Dashboard 与压缩
 
-既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`，但只允许成员空闲时调用；`STARTING/RUNNING`（包括 Dashboard 请求）会明确拒绝并要求先 `stop`。空闲 live child 依次应用并核对 model/thinking，任一步失败都回滚且不改持久配置；无 live child 时先持久化，到下次 run 启动核对。每轮首个真实 assistant `message_end` 的 `provider/model` 还必须与目标完全匹配；缺失或不同会停止不可信 child，让任务进入可恢复失败路径，且不自动重放。Dashboard 仍绑定 loopback、只读观察，唯一控制是两个选择器加一个应用按钮，一次提交成员模型与思考程度；plan 注册不启动 Dashboard，实际派工才沿用原准备流程。
+既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`，但只允许成员空闲时调用；`STARTING/RUNNING`（包括 Dashboard 请求）会明确拒绝并要求先 `stop`。空闲 live child 依次应用并核对 model/thinking，任一步失败都回滚且不改持久配置；无 live child 时先持久化，到下次 run 启动核对。每轮首个真实 assistant `message_end` 的 `provider/model` 还必须与目标完全匹配；缺失或不同会停止不可信 child，让任务进入可恢复失败路径，且不自动重放。Dashboard 仍绑定 loopback、只读观察，唯一控制是两个选择器加一个应用按钮，一次提交成员模型与思考程度；plan 注册不启动 Dashboard，实际派工才沿用原准备流程。**像素办公室与视觉面板（可视化团队状态墙）延期**：仅在用户明确确认布局与交互需求后另行实现；当前 Dashboard 不提供成员自由聊天、唤醒、派工或任何自动调度控件。
 
 成员启动时调用 `setAutoCompaction(true)` 启用 Pi 原生 auto-compaction。orchestrator 不设自定义阈值，不在 settled 后主动调用 compact，也不写压缩交接文件。原生压缩或成员会话失败表现为既有 `ERROR/INTERRUPTED` 状态，不自动重放；由 Leader依据 TeamState 和成员输出决定是否轮换接续。
 

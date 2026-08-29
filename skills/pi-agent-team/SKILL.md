@@ -33,7 +33,7 @@ description: Use when the main Pi needs persistent multi-agent execution for a c
 
 initial 注册与名册增长（新增成员）各是一次 confirmation（USER_GATE）；同名册修订与既有成员的持续派发不再确认。拒绝/取消必须零 UUID、状态、文件、Dashboard、child 副作用。改变角色配置、ownership、acceptance 或新增成员时，用完整新计划加实时 `expectedRevision` 提交；过期 revision 不重试、不猜测。
 
-未规划 team 可继续 ad-hoc `run/parallel`。注册 plan 后只用 planned 标识，不以 ad-hoc payload 扩大范围。
+所有新派工都必须先注册 plan；未规划 team 不接受 ad-hoc `run/parallel`。旧 TeamState 仅保留 `status`、`wait`、`stop`、`kill`、`set-model` 与恢复路径，不以 inline payload 扩大范围。
 
 ## 修订先商量
 
@@ -62,6 +62,10 @@ plan -> run/parallel READY task -> SUBMITTED
 - `cancel {taskIds}`：放弃 PENDING/READY/BLOCKED/REPORT_INVALID 任务并释放其路径锁；依赖它的 PENDING/READY 任务级联取消。RUNNING 用 stop/kill，SUBMITTED/FIX_REQUIRED 先走 review 循环。
 - `review {reviewRoundId, taskIds}`：只审 SUBMITTED；计划 Reviewer 是唯一判定者。
 - `expert {expertRoundId, expertId, taskIds, objective}`：仅预批准 debugger/product/optimizer；只读、不取 ownership、不写 verdict。optimizer 只接 VERIFIED。
+- `steer {member, message}`：只对**正在运行**成员注入一次受控短消息（Pi 公开 steer RPC）；无公开 steer 能力的 client 显式拒绝，不伪造冻结 RPC。
+- `pause {taskId}`：软中断（与 Esc/stop 同一 abort 语义），child/Session/Dashboard 全保留；成员 `INTERRUPTED`、任务 `BLOCKED` 且不重放。`resume {taskId}` 由 Leader 显式重派**同一任务** attempt+1（走 run 全部 preflight），非法状态拒绝。
+- `answer-request {requestId, answer}` / `resolve-request {requestId}`：请求 `OPEN` → 答复后 `ANSWERED` → 发起成员下一次显式 dispatch 注入答案后消费为 `RESOLVED`（review/expert 换用新 roundId 也不影响），或显式关闭；已 `RESOLVED` 拒绝重复操作。旧快照丢失状态的请求一律回 `OPEN`。
+- 受控消息：成员报告可用 `messages: [{to, text}]` 向同一已注册计划内成员发一次性消息（每报告 ≤ 5 条、单条 ≤ 1000 字符、每接收者未送达队列 ≤ 20 条）；仅在接收者下一次显式 dispatch 的 prompt 被接受后标记送达，未接受原样保留，不自动重放。
 - runtime 永不自动调用下一动作。Leader解释 Reviewer/专家意见并决定下一显式调用。
 
 `FIX_REQUIRED` 保留 Reviewer 的 `fix_prompt` 原文。再次 `run` 是同一 task 的新 attempt，不创建“修复任务”，也不 amendment。ownership 从 RUNNING 保持到 VERIFIED/CANCELED；SUBMITTED、AUDITING、FIX_REQUIRED、BLOCKED、REPORT_INVALID 都不释放。
@@ -101,7 +105,8 @@ Evidence 内容规范（写入每个 dispatch prompt 的硬约束）：`evidence
 - `wait`：显式收集完整结果；后台 planned completion 已自动发送精简 delta，不轮询。
 - `stop`：软中断，保留 Session/授权，不重放。
 - `kill`：终止 child；活动 execution attempt 取消，授权与 Session UUID 保留。
-- `set-model {member:{id,model,thinking?}}`：只允许空闲成员调用；`STARTING/RUNNING` 必须先 `stop`。模型与可选思考程度走同一后端；live child 切换后核对两字段，不一致保持旧持久配置，无 live child 则下次 run 生效。下一轮首个真实 assistant 回复的 `provider/model` 还必须完全匹配，否则本轮失败、停止不可信 child、绝不自动重放。Dashboard 的唯一控制是两个选择器和一个应用按钮，一次提交 model+thinking，并遵循同一限制。
+- `set-model {member:{id,model,thinking?}}`：只允许空闲成员调用；`STARTING/RUNNING` 必须先 `stop`。模型与可选思考程度走同一后端；live child 切换后核对两字段，不一致保持旧持久配置，无 live child 则下次 run 生效。下一轮首个真实 assistant 回复的 `provider/model` 还必须完全匹配，否则本轮失败、停止不可信 child、绝不自动重放。Dashboard 的唯一控制是两个选择器和一个应用按钮，一次提交 model+thinking，并遵循同一限制。**像素办公室与视觉面板延期**：等待用户确认布局与交互需求后再实施；Dashboard 不提供自由聊天、自动唤醒、自动派工或自动熔断控件。
+- 健康告警：`status` 可查看成员 `health=` 等级与原因。三层模型证据、最后事件/工具、用量与 Context 由 runtime 在成员最终化时一次性记录；连续工具错误、重复工具、auto-retry 的固定阈值只升告警等级并留言原因，**仅告警不干预**——不自动 steer/stop/kill、不自动派发，由 Leader 依据状态决定人工动作。
 
 TeamState 是唯一结构化事实源。恢复时先 `status`，行动前由 runtime 再校验实时状态；中断、provider 错误、REPORT_INVALID 或原生压缩/会话失败都表现为既有状态，由 Leader显式选择重试、修复、换成员（需 amendment）或停问用户。`REPORT_INVALID` 一律按原任务重派核对（`run` 同一 taskId，新 attempt），不得从正文推断成功或跳过核对。
 

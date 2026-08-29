@@ -18,6 +18,7 @@ import {
 	configHash,
 	emptyState,
 	MAX_CONCURRENCY,
+	MAX_MEMBER_MESSAGE_QUEUE_PER_RECEIVER,
 	migrateState,
 	normalizeOwnedPath,
 	parseReportEnvelope,
@@ -96,6 +97,7 @@ class FakeClient implements RpcClientLike {
 	stopCalls = 0;
 	promptCalls: string[] = [];
 	abortCalls = 0;
+	steerCalls: string[] = [];
 	setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	setThinkingLevelCalls: string[] = [];
 	idleTimeouts: Array<number | undefined> = [];
@@ -167,6 +169,12 @@ class FakeClient implements RpcClientLike {
 		this.abortCalls++;
 		if (this.abortError) throw this.abortError;
 	}
+	// Leader steer passthrough (superscript of Pi's public RpcClient.steer):
+	// records the injected message for assertions; steerMissing removes it so the
+	// runtime's no-public-steer rejection path can be exercised.
+	async steer(message: string): Promise<void> {
+		this.steerCalls.push(message);
+	}
 	async setModel(provider: string, modelId: string): Promise<unknown> {
 		this.setModelCalls.push({ provider, modelId });
 		if (!this.ignoreModelUpdates) this.stateModel = `${provider}/${modelId}`;
@@ -235,6 +243,8 @@ class FakeCompatibility implements CompatibilityPort {
 	ignoreModelUpdates = false;
 	ignoreThinkingUpdates = false;
 	responseModel?: string | null;
+	// Clients without the optional public steer surface (older/embedded adapters).
+	steerMissing = false;
 	membersSeen: any[] = [];
 
 	readonly order: string[];
@@ -271,6 +281,7 @@ class FakeCompatibility implements CompatibilityPort {
 		client.ignoreThinkingUpdates = this.ignoreThinkingUpdates;
 		client.responseModel = this.responseModel;
 		if (this.blockIdle) client.blockUntilIdle();
+		if (this.steerMissing) (client as unknown as { steer?: ((message: string) => Promise<void>) | undefined }).steer = undefined;
 		this.clients.push(client);
 		return { client, cleanupPrompt: async () => undefined };
 	}
@@ -477,6 +488,22 @@ function executionReport(taskId: string, status: "SUBMITTED" | "BLOCKED" = "SUBM
 	return `Execution body that remains in the child session.\n${JSON.stringify({ agent_team_report: { type: "execution", taskId, status, summary, evidence: [`evidence/${taskId}`], requests: [] } })}`;
 }
 
+function executionReportWith(
+	taskId: string,
+	extra: { summary?: string; requests?: unknown[]; messages?: unknown[] } = {},
+): string {
+	const report: Record<string, unknown> = {
+		type: "execution",
+		taskId,
+		status: "SUBMITTED",
+		summary: extra.summary ?? "execution summary",
+		evidence: [],
+		requests: extra.requests ?? [],
+	};
+	if (extra.messages) report.messages = extra.messages;
+	return `Execution body.\n${JSON.stringify({ agent_team_report: report })}`;
+}
+
 function reviewReport(
 	roundId: string,
 	decisions: Array<{ taskId: string; verdict: "VERIFIED" | "FIX_REQUIRED"; fix_prompt?: string }>,
@@ -485,8 +512,20 @@ function reviewReport(
 	return `Review body.\n${JSON.stringify({ agent_team_report: { type: "review", reviewRoundId: roundId, summary, evidence: ["review/evidence"], requests: [], decisions } })}`;
 }
 
+function reviewReportWith(
+	roundId: string,
+	decisions: Array<{ taskId: string; verdict: "VERIFIED" | "FIX_REQUIRED"; fix_prompt?: string }>,
+	requests: Array<{ kind: "question" | "scope" | "dependency" | "human"; text: string }>,
+): string {
+	return `Review body.\n${JSON.stringify({ agent_team_report: { type: "review", reviewRoundId: roundId, summary: "review summary", evidence: ["review/evidence"], requests, decisions } })}`;
+}
+
 function expertReport(roundId: string, summary = "NO_CANDIDATE"): string {
 	return `Expert body.\n${JSON.stringify({ agent_team_report: { type: "expert", expertRoundId: roundId, summary, evidence: [], requests: [] } })}`;
+}
+
+function expertReportWith(roundId: string, messages: unknown[]): string {
+	return `Expert body.\n${JSON.stringify({ agent_team_report: { type: "expert", expertRoundId: roundId, summary: "NO_CANDIDATE", evidence: [], requests: [], messages } })}`;
 }
 
 async function registerPlan(runtime: TeamRuntime, ctx: RuntimeContext, plan: PlanInput = PLAN): Promise<void> {
@@ -1614,6 +1653,9 @@ test("new member omission inherits parent while amendment omission preserves swi
 	await registerPlan(runtime, ctx);
 	assert.equal(runtime.getState().teams.default.members["coder-a"].model.id, "model");
 	await runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/other" } }, ctx);
+	const stagedHealth = runtime.getState().teams.default.members["coder-a"].health!;
+	assert.equal(stagedHealth.configModel, "test/other");
+	assert.equal(stagedHealth.rpcModel, undefined, "a staged switch without a live child must not invent RPC evidence");
 	await runtime.execute({ action: "plan", expectedRevision: 1, plan: PLAN }, ctx);
 	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
 	assert.equal(runtime.getState().teams.default.plan?.revision, 2);
@@ -1660,6 +1702,10 @@ test("idle live switch persists only after model and thinking RPC verification",
 	await runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/other", thinking: "high" } }, ctx);
 	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
 	assert.equal(runtime.getState().teams.default.members["coder-a"].thinking, "high");
+	let health = runtime.getState().teams.default.members["coder-a"].health!;
+	assert.equal(health.configModel, "test/other");
+	assert.equal(health.rpcModel, "test/other", "verified live switch refreshes RPC model evidence");
+	assert.equal(health.firstReplyModel, undefined, "old-model reply evidence is cleared until the next real response");
 	compatibility.clients[0].ignoreModelUpdates = true;
 	await assert.rejects(
 		runtime.execute({ action: "set-model", member: { id: "coder-a", model: "test/model", thinking: "low" } }, ctx),
@@ -1667,6 +1713,9 @@ test("idle live switch persists only after model and thinking RPC verification",
 	);
 	assert.deepEqual(runtime.getState().teams.default.members["coder-a"].model, { provider: "test", id: "other" });
 	assert.equal(runtime.getState().teams.default.members["coder-a"].thinking, "high");
+	health = runtime.getState().teams.default.members["coder-a"].health!;
+	assert.equal(health.configModel, "test/other");
+	assert.equal(health.rpcModel, "test/other", "failed switch preserves prior verified evidence");
 });
 
 test("child startup requires an observable exact model before prompt", async () => {
@@ -1798,4 +1847,333 @@ test("inline markdown renderer keeps fences, envelopes, list numbering, and quot
 	assert.equal(quoted.length, 1);
 	assert.equal(quoted[0].tagName, "BLOCKQUOTE");
 	assert.equal(quoted[0].textContent, "first quoted\nsecond quoted");
+});
+
+// ---------------------------------------------------------------------------
+// Leader control-plane regression: steer (only active members), pause/resume soft
+// interrupt, controlled member messages, pending request lifecycle, health alerts.
+// ---------------------------------------------------------------------------
+
+test("steer injects only into an active member run via the public steer RPC", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	compatibility.blockIdle = true;
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `session-${++uuid}`, () => new FakeDashboard(), () => 60_000);
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a" }, ctx);
+	assert.equal(runtime.getState().teams.default.members["coder-a"].status, "RUNNING");
+
+	const result = await runtime.execute({ action: "steer", member: { id: "coder-a" }, message: "缩小范围,只修契约" }, ctx);
+	assert.match(result.content[0].text, /Steered default\/coder-a/u);
+	assert.deepEqual(compatibility.clients[0].steerCalls, ["缩小范围,只修契约"]);
+
+	await assert.rejects(
+		runtime.execute({ action: "steer", member: { id: "coder-b" }, message: "不该注入" }, ctx),
+		/is not running; steer only injects into an active run/u,
+	);
+	assert.equal(compatibility.clients[0].steerCalls.length, 1, "rejected steer never touches the RPC");
+
+	compatibility.clients[0].completeIdle();
+	await waitFor(() => runtime.getState().teams.default.executionTasks["task-a"].status === "SUBMITTED");
+});
+
+test("steer refuses a client without the public steer surface instead of faking a freeze RPC", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	compatibility.steerMissing = true;
+	compatibility.blockIdle = true;
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard(), () => 60_000);
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a" }, ctx);
+	await assert.rejects(
+		runtime.execute({ action: "steer", member: { id: "coder-a" }, message: "hi" }, ctx),
+		/does not expose public steer/u,
+	);
+	compatibility.clients[0].completeIdle();
+	await waitFor(() => runtime.getState().teams.default.executionTasks["task-a"].status === "SUBMITTED");
+});
+
+test("pause is a soft interrupt that keeps the child and resume explicitly re-dispatches the same task", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.roundOutputsByMember["coder-a"] = [
+		executionReport("task-a"),
+		executionReport("task-a", "SUBMITTED", "resumed execution summary"),
+	];
+	compatibility.blockIdle = true;
+	let uuid = 0;
+	const runtime = new TeamRuntime(compatibility, () => NOW, () => `session-${++uuid}`, () => new FakeDashboard(), () => 60_000);
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a" }, ctx);
+	const sessionId = runtime.getState().teams.default.members["coder-a"].sessionId;
+	const client = compatibility.clients[0];
+
+	const paused = await runtime.execute({ action: "pause", taskId: "task-a" }, ctx);
+	assert.match(paused.content[0].text, /Paused task-a \(coder-a\): BLOCKED/u);
+	assert.match(paused.content[0].text, /resume with taskId to explicitly re-dispatch \(attempt 2\); nothing is replayed automatically/u);
+	assert.equal(client.abortCalls, 1, "pause reuses the soft-abort control");
+	assert.equal(client.stopCalls, 0, "child client survives the pause");
+	let state = runtime.getState();
+	assert.equal(state.teams.default.members["coder-a"].sessionId, sessionId, "session is preserved");
+	assert.equal(state.teams.default.members["coder-a"].status, "INTERRUPTED");
+	assert.equal(state.teams.default.executionTasks["task-a"].status, "BLOCKED");
+	assert.match(state.teams.default.executionTasks["task-a"].lastIssue ?? "", /not replayed/u);
+
+	await assert.rejects(runtime.execute({ action: "pause", taskId: "task-a" }, ctx), /only a RUNNING task can be paused/u);
+
+	// resume is run's explicit dispatch path: same task, next attempt, same session.
+	const resumed = await runtime.execute({ action: "resume", taskId: "task-a", background: true }, ctx);
+	assert.equal(resumed.details.results?.[0]?.status, "RUNNING");
+	state = runtime.getState();
+	assert.equal(state.teams.default.executionTasks["task-a"].status, "RUNNING");
+	assert.equal(state.teams.default.executionTasks["task-a"].attempt, 2);
+	assert.equal(state.teams.default.members["coder-a"].sessionId, sessionId);
+	assert.match(client.promptCalls[1], /Execute planned task task-a, attempt 2/u);
+	client.completeIdle();
+	await runtime.execute({ action: "wait", member: { id: "coder-a" }, timeout: 1_000 }, ctx);
+	state = runtime.getState();
+	assert.equal(state.teams.default.executionTasks["task-a"].status, "SUBMITTED");
+
+	await assert.rejects(runtime.execute({ action: "resume", taskId: "task-a" }, ctx), /cannot start from SUBMITTED/u);
+});
+
+test("controlled member messages enqueue only for planned targets and inject exactly once after acceptance", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReportWith("task-a", {
+		messages: [
+			{ to: "optimizer", text: "证据已清理,请复核" },
+			{ to: "ghost", text: "不应入队" },
+		],
+	});
+	compatibility.outputsByMember.reviewer = reviewReport("review-1", [{ taskId: "task-a", verdict: "VERIFIED" }]);
+	compatibility.outputsByMember.optimizer = expertReport("expert-1");
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	let team = runtime.getState().teams.default;
+	assert.equal(team.memberMessages?.length, 1, "targets outside the registered plan are refused");
+	assert.equal(team.memberMessages?.[0].to, "optimizer");
+	assert.equal(team.memberMessages?.[0].deliveredAt, undefined, "queued until the receiver's next explicit dispatch");
+
+	await runtime.execute({ action: "review", reviewRoundId: "review-1", taskIds: ["task-a"], background: false }, ctx);
+	await runtime.execute({
+		action: "expert",
+		expertRoundId: "expert-1",
+		expertId: "optimizer",
+		taskIds: ["task-a"],
+		objective: "检查证据",
+		background: false,
+	}, ctx);
+	team = runtime.getState().teams.default;
+	assert.equal(team.memberMessages?.[0].deliveredAt, NOW, "accepted prompt marks the message delivered");
+	assert.match(compatibility.clients[2].promptCalls[0], /Controlled messages from planned members to you/u);
+	assert.match(compatibility.clients[2].promptCalls[0], /证据已清理,请复核/u);
+	assert.doesNotMatch(compatibility.clients[2].promptCalls[0], /不应入队/u);
+
+	// A second explicit dispatch of the same receiver does not re-inject the delivered message.
+	compatibility.outputsByMember.optimizer = expertReport("expert-2");
+	await runtime.execute({
+		action: "expert",
+		expertRoundId: "expert-2",
+		expertId: "optimizer",
+		taskIds: ["task-a"],
+		objective: "再次检查",
+		background: false,
+	}, ctx);
+	assert.doesNotMatch(compatibility.clients[2].promptCalls[1], /Controlled messages from planned members to you/u);
+	assert.equal(runtime.getState().teams.default.memberMessages?.length, 1, "delivery record stays for audit");
+});
+
+test("an unaccepted prompt keeps the message pending and the next explicit dispatch injects it once", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReportWith("task-a", { messages: [{ to: "coder-b", text: "参考已更新" }] });
+	compatibility.outputsByMember.reviewer = reviewReport("review-1", [{ taskId: "task-a", verdict: "VERIFIED" }]);
+	compatibility.outputsByMember["coder-b"] = executionReportWith("task-b");
+	compatibility.promptErrorsByMember["coder-b"] = new Error("transport down");
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	await runtime.execute({ action: "review", reviewRoundId: "review-1", taskIds: ["task-a"], background: false }, ctx);
+
+	await assert.rejects(runtime.execute({ action: "run", taskId: "task-b", background: false }, ctx), /transport down/u);
+	let team = runtime.getState().teams.default;
+	assert.equal(team.executionTasks["task-b"].status, "BLOCKED");
+	assert.equal(team.memberMessages?.[0].deliveredAt, undefined, "unaccepted prompt keeps the message pending");
+
+	compatibility.promptErrorsByMember["coder-b"] = undefined;
+	compatibility.blockIdle = true;
+	const retrying = runtime.execute({ action: "run", taskId: "task-b", background: false }, ctx);
+	await waitFor(() => runtime.getState().teams.default.members["coder-b"].status === "RUNNING");
+	const resumedClient = compatibility.clients.at(-1)!;
+	assert.match(resumedClient.promptCalls[0], /参考已更新/u);
+	resumedClient.completeIdle();
+	await retrying;
+	team = runtime.getState().teams.default;
+	assert.equal(team.memberMessages?.[0].deliveredAt, NOW, "accepted re-dispatch marks delivery");
+	assert.equal(team.executionTasks["task-b"].status, "SUBMITTED");
+});
+
+test("pending request lifecycle: OPEN, answered, injected on the source's next dispatch, then RESOLVED", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.roundOutputsByMember["coder-a"] = [
+		executionReportWith("task-a", {
+			requests: [
+				{ kind: "question", text: "范围是否含迁移脚本?" },
+				{ kind: "scope", text: "可以扩展测试吗?" },
+			],
+		}),
+		executionReportWith("task-a", { summary: "attempt two" }),
+	];
+	compatibility.roundOutputsByMember.reviewer = [
+		reviewReport("review-1", [{ taskId: "task-a", verdict: "FIX_REQUIRED", fix_prompt: "请按答复收敛范围。" }]),
+		reviewReport("review-2", [{ taskId: "task-a", verdict: "VERIFIED" }]),
+	];
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	let requests = runtime.getState().teams.default.pendingRequests;
+	assert.equal(requests.length, 2);
+	assert.equal(requests.every((request) => request.status === "OPEN"), true);
+	const [answeredId, closedId] = requests.map((request) => request.id);
+
+	await runtime.execute({ action: "review", reviewRoundId: "review-1", taskIds: ["task-a"], background: false }, ctx);
+	const answered = await runtime.execute({ action: "answer-request", requestId: answeredId, answer: "包含迁移脚本" }, ctx);
+	assert.match(answered.content[0].text, /injected only into that source's next explicit dispatch/u);
+	const closed = await runtime.execute({ action: "resolve-request", requestId: closedId }, ctx);
+	assert.match(closed.content[0].text, /will not be injected or re-raised/u);
+	requests = runtime.getState().teams.default.pendingRequests;
+	assert.equal(requests.find((request) => request.id === answeredId)?.status, "ANSWERED");
+	assert.equal(requests.find((request) => request.id === answeredId)?.answer, "包含迁移脚本");
+	assert.equal(requests.find((request) => request.id === closedId)?.status, "RESOLVED");
+
+	await assert.rejects(
+		runtime.execute({ action: "answer-request", requestId: closedId, answer: "迟到答复" }, ctx),
+		/only OPEN requests can be answered/u,
+	);
+
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	const prompt = compatibility.clients[0].promptCalls[1];
+	assert.match(prompt, /Leader answers to your earlier requests/u);
+	assert.match(prompt, /包含迁移脚本/u);
+	assert.doesNotMatch(prompt, /扩展测试|迟到答复/u, "resolved requests are never injected");
+	requests = runtime.getState().teams.default.pendingRequests;
+	assert.equal(requests.find((request) => request.id === answeredId)?.status, "RESOLVED", "injection consumes the answer");
+	assert.equal(requests.find((request) => request.id === closedId)?.status, "RESOLVED");
+	await assert.rejects(
+		runtime.execute({ action: "resolve-request", requestId: answeredId }, ctx),
+		/already RESOLVED/u,
+	);
+
+	await runtime.execute({ action: "review", reviewRoundId: "review-2", taskIds: ["task-a"], background: false }, ctx);
+	assert.equal(runtime.getState().teams.default.executionTasks["task-a"].status, "VERIFIED");
+});
+
+test("answered review requests are consumed by the reviewer's next explicit round, not stranded on the old round id", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.roundOutputsByMember["coder-a"] = [
+		executionReport("task-a", "SUBMITTED", "first submission"),
+		executionReport("task-a", "SUBMITTED", "fixed submission"),
+	];
+	compatibility.roundOutputsByMember.reviewer = [
+		reviewReportWith(
+			"review-1",
+			[{ taskId: "task-a", verdict: "FIX_REQUIRED", fix_prompt: "按答复修正。" }],
+			[{ kind: "question", text: "下一轮是否检查迁移兼容?" }],
+		),
+		reviewReport("review-2", [{ taskId: "task-a", verdict: "VERIFIED" }]),
+	];
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	await runtime.execute({ action: "review", reviewRoundId: "review-1", taskIds: ["task-a"], background: false }, ctx);
+	const request = runtime.getState().teams.default.pendingRequests.find((candidate) => candidate.fromType === "review")!;
+	assert.equal(request.status, "OPEN");
+	await runtime.execute({ action: "answer-request", requestId: request.id, answer: "需要检查迁移兼容" }, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	await runtime.execute({ action: "review", reviewRoundId: "review-2", taskIds: ["task-a"], background: false }, ctx);
+	const reviewerClient = compatibility.clients[1];
+	assert.match(reviewerClient.promptCalls[1], /Leader answers to your earlier requests/u);
+	assert.match(reviewerClient.promptCalls[1], /需要检查迁移兼容/u);
+	assert.equal(runtime.getState().teams.default.pendingRequests.find((candidate) => candidate.id === request.id)?.status, "RESOLVED");
+});
+
+test("health snapshot records three-layer model evidence and gradual alerts without any automatic intervention", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	compatibility.blockIdle = true;
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard(), () => 60_000);
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a" }, ctx);
+	const client = compatibility.clients[0];
+	const snapshotsBefore = ctx.snapshots.length;
+	for (let index = 0; index < 5; index++) {
+		client.emit({ type: "tool_execution_start", toolName: "read" });
+		if (index < 4) client.emit({ type: "tool_execution_start", toolName: "grep" });
+	}
+	client.emit({ type: "tool_execution_end", toolName: "read", isError: true });
+	client.emit({ type: "tool_execution_end", toolName: "read", isError: true });
+	client.emit({ type: "tool_execution_end", toolName: "read", isError: false });
+	client.emit({ type: "tool_execution_end", toolName: "read", isError: true });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(ctx.snapshots.length, snapshotsBefore, "streaming tool events never append delta snapshots");
+
+	client.completeIdle();
+	await waitFor(() => runtime.getState().teams.default.executionTasks["task-a"].status === "SUBMITTED");
+	assert.equal(ctx.snapshots.length, snapshotsBefore + 1, "health persists once with finalization");
+	const health = runtime.getState().teams.default.members["coder-a"].health!;
+	assert.equal(health.configModel, "test/model");
+	assert.equal(health.rpcModel, "test/model");
+	assert.equal(health.firstReplyModel, "test/model");
+	assert.equal(health.lastTool, "read");
+	assert.equal(health.consecutiveToolErrors, 2);
+	assert.equal(health.repeatedTool, "read");
+	assert.equal(health.repeatedToolRuns, 5);
+	assert.equal(health.level, "ELEVATED");
+	assert.match(health.levelReason ?? "", /no auto steer\/stop\/kill/u);
+	// Alert-only: no abort/stop, no extra dispatch, and the task settles normally.
+	assert.equal(client.abortCalls, 0);
+	assert.equal(client.stopCalls, 0);
+	assert.equal(compatibility.clients.length, 1);
+	assert.equal(client.promptCalls.length, 1);
+	assert.equal(runtime.getState().teams.default.executionTasks["task-a"].status, "SUBMITTED");
+});
+
+test("member message queue enforces the per-receiver cap and refuses overflow without evicting pending records", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReportWith("task-a");
+	compatibility.outputsByMember.reviewer = reviewReport("review-1", [{ taskId: "task-a", verdict: "VERIFIED" }]);
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	await runtime.execute({ action: "review", reviewRoundId: "review-1", taskIds: ["task-a"], background: false }, ctx);
+
+	compatibility.roundOutputsByMember.optimizer = Array.from({ length: 6 }, (_, round) =>
+		expertReportWith(
+			`overflow-${round}`,
+			Array.from({ length: 5 }, (_, index) => ({ to: "coder-b", text: `m${round}-${index}` })),
+		),
+	);
+	for (let round = 0; round < 6; round++) {
+		await runtime.execute({
+			action: "expert",
+			expertRoundId: `overflow-${round}`,
+			expertId: "optimizer",
+			taskIds: ["task-a"],
+			objective: "检查",
+			background: false,
+		}, ctx);
+	}
+	const messages = runtime.getState().teams.default.memberMessages ?? [];
+	assert.equal(messages.length, MAX_MEMBER_MESSAGE_QUEUE_PER_RECEIVER);
+	assert.equal(messages.every((message) => message.to === "coder-b" && !message.deliveredAt), true);
+	assert.equal(messages.some((message) => message.text.startsWith("m5-")), false, "overflow is refused, not silently evicted");
 });

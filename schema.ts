@@ -7,6 +7,12 @@ const Id = Type.String({
 	maxLength: 64,
 	pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
 });
+// Runtime-generated request IDs include their source tuple, e.g. execution:task-a:1.
+const RequestId = Type.String({
+	minLength: 1,
+	maxLength: 200,
+	pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+});
 const ToolName = Type.String({ minLength: 1, maxLength: 80, pattern: "^[a-zA-Z0-9_-]+$" });
 const Member = Type.Object(
 	{
@@ -68,7 +74,7 @@ const Plan = Type.Object(
 
 export const AgentTeamParams = Type.Object(
 	{
-		action: StringEnum(["plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "cancel", "set-model", "set-auto"] as const),
+		action: StringEnum(["plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "cancel", "set-model", "set-auto", "steer", "pause", "resume", "answer-request", "resolve-request"] as const),
 		team: Type.Optional(Id),
 		member: Type.Optional(Member),
 		plan: Type.Optional(Plan),
@@ -95,6 +101,11 @@ export const AgentTeamParams = Type.Object(
 		// set-auto: session-scoped USER_GATE authorization for plan registration
 		// and roster growth (memory-only; new sessions default to confirmation).
 		auto: Type.Optional(Type.Boolean()),
+		// steer: Leader 对正在运行的成员注入受控短消息(Pi 公开 steer RPC)。
+		message: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+		// answer-request/resolve-request: 推进 PendingRequest 生命周期。
+		requestId: Type.Optional(RequestId),
+		answer: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
 	},
 	{ additionalProperties: false },
 );

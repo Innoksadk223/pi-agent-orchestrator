@@ -31,6 +31,11 @@ export interface RpcClientLike {
 	prompt(message: string): Promise<void>;
 	waitForIdle(timeout?: number): Promise<void>;
 	abort(): Promise<void>;
+	// Leader steer: passthrough of Pi's public RpcClient.steer (queue a steering
+	// message that interrupts the agent mid-run). Optional so older/embedded
+	// adapters without the public surface stay usable; runtime rejects steer when
+	// the live client lacks it instead of faking steer/pause/resume RPCs.
+	steer?(message: string): Promise<void>;
 	// Runtime model/thinking switch, passthrough of Pi's public RpcClient methods.
 	setModel(provider: string, modelId: string): Promise<unknown>;
 	setThinkingLevel(level: string): Promise<void>;

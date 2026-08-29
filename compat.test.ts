@@ -10,6 +10,8 @@ function fakeClient(): RpcClientLike {
 		prompt: async () => undefined,
 		waitForIdle: async () => undefined,
 		abort: async () => undefined,
+		// 原生 steer passthrough:Pi 公开 RpcClient.steer 的可选透传,供 runtime 对活动成员注入。
+		steer: async () => undefined,
 		setModel: async () => undefined,
 		setThinkingLevel: async () => undefined,
 		getState: async () => ({ sessionId: "child-session" }),
@@ -76,4 +78,37 @@ test("createMemberClient probe failure falls back to first launch (no warning pa
 	const handle = await adapter.createMemberClient({ ...BASE_MEMBER, sessionId: "any-id" });
 	assert.equal(handle.restored, false);
 	assert.ok(!calls[0].args.includes("--session-id"));
+});
+
+test("createMemberClient passes the optional public steer surface through untouched", async () => {
+	const steered: string[] = [];
+	let created = 0;
+	const adapter = new PiCompatibilityAdapter({
+		version: "0.84.1",
+		cliPath: "/fake/pi",
+		factory: () => {
+			created++;
+			return { ...fakeClient(), steer: async (message: string) => { steered.push(message); } };
+		},
+		listSessions: async () => [],
+	});
+	const handle = await adapter.createMemberClient({ ...BASE_MEMBER, sessionId: "steer-session" });
+	assert.equal(typeof handle.client.steer, "function");
+	await handle.client.steer?.("优先处理契约测试");
+	assert.deepEqual(steered, ["优先处理契约测试"]);
+	assert.equal(created, 1);
+
+	// 缺省 client(旧/内嵌适配器无公开 steer)保持可选,runtime 会显式拒绝而不是伪造冻结 RPC。
+	const bare = new PiCompatibilityAdapter({
+		version: "0.82.1",
+		cliPath: "/fake/pi",
+		factory: () => {
+			const client = fakeClient();
+			delete (client as unknown as { steer?: unknown }).steer;
+			return client;
+		},
+		listSessions: async () => [],
+	});
+	const bareHandle = await bare.createMemberClient({ ...BASE_MEMBER, sessionId: "bare-session" });
+	assert.equal(bareHandle.client.steer, undefined);
 });

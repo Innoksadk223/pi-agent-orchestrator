@@ -17,7 +17,7 @@ import type {
 } from "./compat.ts";
 import type { DashboardModelRef } from "./web-dashboard.ts";
 
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 3;
 export const MAX_PARALLEL_TASKS = 8;
 export const MAX_CONCURRENCY = 4;
 export const MAX_MEMBER_OUTPUT_BYTES = 50 * 1024;
@@ -36,6 +36,24 @@ export const STATE_ENTRY_TYPE = "pi-agent-orchestrator";
 // to the main Pi (success or async failure). Delivered as followUp + triggerTurn
 // so an idle main agent starts a continuation turn without steering a live chain.
 export const AGENT_TEAM_COMPLETION_TYPE = "agent-team-completion";
+// 受控成员消息与请求队列的固定上限(入队即审计;送达标记之后仍保留)。
+export const MAX_REPORT_MESSAGES = 5;
+export const MAX_MEMBER_MESSAGE_CHARS = 1000;
+export const MAX_MEMBER_MESSAGE_QUEUE_PER_RECEIVER = 20;
+export const MAX_MEMBER_MESSAGE_QUEUE = 100;
+export const MAX_PENDING_REQUESTS = 100;
+// Member health 渐进告警阈值的固定公开契约:只评估等级并留下原因,
+// 绝不自动 steer/stop/kill 或自动派发。
+export const HEALTH_LEVELS = ["NORMAL", "ELEVATED", "DEGRADED", "CRITICAL"] as const;
+export type HealthLevel = (typeof HEALTH_LEVELS)[number];
+export const MEMBER_HEALTH_THRESHOLDS = {
+	toolErrorElevated: 2,
+	toolErrorDegraded: 4,
+	toolErrorCritical: 6,
+	repeatedToolElevated: 5,
+	repeatedToolDegraded: 10,
+	autoRetryCritical: 3,
+} as const;
 
 export const MEMBER_STATUSES = [
 	"APPROVED",
@@ -74,6 +92,9 @@ export interface MemberState extends MemberConfig {
 	// Pi native auto-compaction enablement failure, persisted for status visibility.
 	// This operational note does not affect roster authorization or configHash.
 	contextNote?: string;
+	// 渐进健康记录(仅告警):只记录模型证据/事件/工具/用量/Context 与等级;
+	// 等级提升发生在成员最终化的唯一一次持久化中,不由流式事件逐条追加快照。
+	health?: MemberHealth;
 }
 
 export const EXECUTION_TASK_STATUSES = [
@@ -92,6 +113,8 @@ export type ExecutionTaskStatus = (typeof EXECUTION_TASK_STATUSES)[number];
 export type PlanMemberKind = "coder" | "reviewer" | "debugger" | "product" | "optimizer";
 export type ExpertKind = Extract<PlanMemberKind, "debugger" | "product" | "optimizer">;
 
+export type PendingRequestStatus = "OPEN" | "ANSWERED" | "RESOLVED";
+
 export interface PendingRequest {
 	id: string;
 	fromType: "execution" | "review" | "expert";
@@ -99,6 +122,48 @@ export interface PendingRequest {
 	kind: "question" | "scope" | "dependency" | "human";
 	text: string;
 	createdAt: string;
+	// 生命周期:成员回报产生 OPEN;answer-request 注入答案后 ANSWERED;
+	// 发起者下一次显式 dispatch 消费答案后(或 resolve-request 显式关闭)RESOLVED。
+	// 旧快照恢复时默认 OPEN,绝不凭空判定已答复/已解决。
+	status: PendingRequestStatus;
+	answer?: string;
+	answeredAt?: string;
+	resolvedAt?: string;
+}
+
+// 发往已规划成员的受控异步消息:仅同一已注册计划内的目标成员,
+// 有数量/长度/队列上限,只在接收者下一次显式 dispatch 的 prompt 被接受后
+// 标记送达(deliveredAt),且每次 dispatch 只注入一次;送达记录保留用于审计。
+export interface MemberMessage {
+	id: string;
+	to: string;
+	fromType: "execution" | "review" | "expert";
+	fromId: string;
+	text: string;
+	createdAt: string;
+	deliveredAt?: string;
+}
+
+export interface MemberHealth {
+	// 三层模型证据:配置模型(plan/set-model 持久化)、RPC 模型(child getState 报告)、
+	// 首回复模型(本轮第一条真实 assistant 回复的事件元数据)。
+	configModel: string;
+	rpcModel?: string;
+	firstReplyModel?: string;
+	lastEventType?: string;
+	lastTool?: string;
+	lastEventAt?: string;
+	lastToolAt?: string;
+	consecutiveToolErrors: number;
+	repeatedTool?: string;
+	repeatedToolRuns: number;
+	autoRetries: number;
+	// 最近一轮的用量快照与当前 Context 占用(getSessionStats contextUsage)。
+	usage: UsageTotals;
+	context?: { contextWindow: number; contextTokens: number | null; contextPercent: number | null };
+	level: HealthLevel;
+	levelReason?: string;
+	updatedAt: string;
 }
 
 export interface TaskPacket {
@@ -171,6 +236,8 @@ export interface TeamRecord {
 	reviewRounds: Record<string, ReviewRound>;
 	expertRounds: Record<string, ExpertRound>;
 	pendingRequests: PendingRequest[];
+	// 受控异步消息审计队列;旧状态恢复时默认安全地初始化为空。
+	memberMessages?: MemberMessage[];
 }
 
 export interface TeamState {
@@ -278,10 +345,14 @@ interface DispatchTask {
 	member: Pick<MemberInput, "id">;
 	task: string;
 	target: RunTarget;
+	// 注入到本次 prompt 的受控成员消息与请求答案;prompt 被接受后才标记送达/解决,
+	// 未接受则保留,下次显式 dispatch 再次注入(绝不自动重放)。
+	messageIds?: string[];
+	requestIds?: string[];
 }
 
 export interface ToolParams {
-	action: "plan" | "run" | "parallel" | "review" | "expert" | "wait" | "status" | "stop" | "kill" | "cancel" | "set-model" | "set-auto";
+	action: "plan" | "run" | "parallel" | "review" | "expert" | "wait" | "status" | "stop" | "kill" | "cancel" | "set-model" | "set-auto" | "steer" | "pause" | "resume" | "answer-request" | "resolve-request";
 	team?: string;
 	member?: MemberInput;
 	plan?: PlanInput;
@@ -299,6 +370,11 @@ export interface ToolParams {
 	background?: boolean;
 	timeout?: number;
 	auto?: boolean;
+	// steer: Leader 对正在运行成员的受控短消息注入(Pi 公开 steer RPC)。
+	message?: string;
+	// answer-request/resolve-request: 请求生命周期推进。
+	requestId?: string;
+	answer?: string;
 }
 
 export class TeamInputError extends Error {
@@ -329,6 +405,7 @@ function emptyTeam(id: string): TeamRecord {
 		reviewRounds: {},
 		expertRounds: {},
 		pendingRequests: [],
+		memberMessages: [],
 	};
 }
 
@@ -721,11 +798,14 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 	};
 	const planFields: Array<keyof ToolParams> = [
 		"plan", "expectedRevision", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective",
+		// 操控/生命周期字段只允许对应 action(message=steer, requestId/answer=answer-request/resolve-request);
+		// 其余 action 一律禁止,非法组合在产生任何副作用前拒绝。
+		"message", "requestId", "answer",
 	];
 
 	if (params.action === "plan") {
 		if (!params.plan) throw new TeamInputError("plan requires plan.");
-		forbid("member", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "background", "timeout", "auto", "full");
+		forbid("member", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "background", "timeout", "auto", "full", "message", "requestId", "answer");
 		if (team?.plan && params.expectedRevision === undefined) throw new TeamInputError("Plan amendment requires expectedRevision.");
 		if (!team?.plan && params.expectedRevision !== undefined) throw new TeamInputError("Initial plan forbids expectedRevision.");
 		return;
@@ -733,7 +813,7 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 	if (params.action === "run") {
 		if (!team?.plan) throw new TeamInputError(`Planned run requires a registered plan for team ${teamId}.`);
 		if (!params.taskId) throw new TeamInputError("Planned run requires taskId.");
-		forbid("member", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full", "message", "requestId", "answer");
 		return;
 	}
 	if (params.action === "parallel") {
@@ -741,7 +821,7 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.taskIds || params.taskIds.length < 2 || params.taskIds.length > MAX_PARALLEL_TASKS) {
 			throw new TeamInputError(`Planned parallel requires 2-${MAX_PARALLEL_TASKS} taskIds.`);
 		}
-		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full", "message", "requestId", "answer");
 		return;
 	}
 	if (params.action === "cancel") {
@@ -749,7 +829,7 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length) {
 			throw new TeamInputError(`cancel requires 1-${MAX_PARALLEL_TASKS} unique taskIds.`);
 		}
-		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full");
+		forbid("member", "taskId", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full", "message", "requestId", "answer");
 		return;
 	}
 	if (params.action === "review") {
@@ -757,7 +837,7 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.reviewRoundId || !params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length) {
 			throw new TeamInputError(`review requires reviewRoundId and 1-${MAX_PARALLEL_TASKS} unique taskIds.`);
 		}
-		forbid("member", "taskId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full", "message", "requestId", "answer");
 		return;
 	}
 	if (params.action === "expert") {
@@ -765,7 +845,33 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 		if (!params.expertRoundId || !params.expertId || !params.taskIds?.length || params.taskIds.length > MAX_PARALLEL_TASKS || new Set(params.taskIds).size !== params.taskIds.length || !params.objective) {
 			throw new TeamInputError(`expert requires expertRoundId, expertId, 1-${MAX_PARALLEL_TASKS} unique taskIds, and objective.`);
 		}
-		forbid("member", "taskId", "reviewRoundId", "plan", "expectedRevision", "timeout", "auto", "full");
+		forbid("member", "taskId", "reviewRoundId", "plan", "expectedRevision", "timeout", "auto", "full", "message", "requestId", "answer");
+		return;
+	}
+	// Leader 控制面: steer/pause/resume 与请求生命周期推进。全部在副作用前校验。
+	if (params.action === "steer") {
+		if (!params.member?.id || params.message === undefined) throw new TeamInputError("steer requires member.id and message.");
+		assertMemberIdOnly(params.member);
+		forbid("taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full", "requestId", "answer");
+		return;
+	}
+	if (params.action === "pause" || params.action === "resume") {
+		if (!team?.plan) throw new TeamInputError(`${params.action} requires a registered plan for team ${teamId}.`);
+		if (!params.taskId) throw new TeamInputError(`${params.action} requires taskId.`);
+		forbid("member", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "timeout", "auto", "full", "message", "requestId", "answer");
+		// resume 沿用 run 的显式派发语义(允许 background);pause 只软中断,必须同步收尾。
+		if (params.action === "pause") forbid("background");
+		return;
+	}
+	if (params.action === "answer-request") {
+		if (params.requestId === undefined) throw new TeamInputError("answer-request requires requestId.");
+		if (params.answer === undefined) throw new TeamInputError("answer-request requires answer.");
+		forbid("member", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full", "message");
+		return;
+	}
+	if (params.action === "resolve-request") {
+		if (params.requestId === undefined) throw new TeamInputError("resolve-request requires requestId.");
+		forbid("member", "taskId", "taskIds", "reviewRoundId", "expertRoundId", "expertId", "objective", "plan", "expectedRevision", "background", "timeout", "auto", "full", "message", "answer");
 		return;
 	}
 	if (params.action === "wait") {
@@ -806,7 +912,7 @@ export function migrateState(value: unknown, now = new Date().toISOString()): Te
 	if (!value || typeof value !== "object") throw new TeamStateError("State snapshot is not an object.");
 	const source = value as Record<string, unknown>;
 	const version = source.schemaVersion ?? 0;
-	if (version !== 0 && version !== 1 && version !== STATE_SCHEMA_VERSION) {
+	if (version !== 0 && version !== 1 && version !== 2 && version !== STATE_SCHEMA_VERSION) {
 		throw new TeamStateError(`Unsupported future state schema ${String(version)}; state is read-only.`);
 	}
 	if (!source.teams || typeof source.teams !== "object") throw new TeamStateError("State snapshot has no teams map.");
@@ -822,6 +928,16 @@ export function migrateState(value: unknown, now = new Date().toISOString()): Te
 		team.reviewRounds ??= {};
 		team.expertRounds ??= {};
 		team.pendingRequests ??= [];
+		team.memberMessages ??= [];
+		// 旧快照(无生命周期字段)默认安全恢复:请求一律视为 OPEN——未答复、未解决,
+		// 绝不凭空标记 ANSWERED/RESOLVED;送达标记缺失的消息保持待注入,由下一位
+		// Leader 显式 dispatch 决定是否送达(不自动重放、不自动派发)。
+		for (const pending of team.pendingRequests) {
+			if (!pending || typeof pending !== "object") continue;
+			const request = pending as PendingRequest;
+			if (request.status === "ANSWERED" || request.status === "RESOLVED") continue;
+			request.status = "OPEN";
+		}
 		for (const member of Object.values(team.members)) {
 			if (!member || typeof member !== "object" || !member.sessionId || !member.configHash) {
 				throw new TeamStateError("State snapshot contains an invalid member.");
@@ -952,6 +1068,55 @@ function assistantFailure(event: any): string | undefined {
 
 function zeroUsage(): UsageTotals {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+}
+
+// 健康等级序:只升不降(渐进告警)。评估只产生等级与原因,绝不触发任何自动动作。
+const HEALTH_RANK: Record<HealthLevel, number> = { NORMAL: 0, ELEVATED: 1, DEGRADED: 2, CRITICAL: 3 };
+
+export interface MemberHealthProbe {
+	firstReplyModel?: string;
+	lastEventType?: string;
+	lastTool?: string;
+	lastEventAt?: string;
+	lastToolAt?: string;
+	toolErrors: number;
+	repeatedTool?: string;
+	repeatedToolRuns: number;
+	autoRetries: number;
+}
+
+function zeroHealthProbe(): MemberHealthProbe {
+	return { toolErrors: 0, repeatedToolRuns: 0, autoRetries: 0 };
+}
+
+// 固定阈值评估:连续工具错误 / 本轮重复同一工具次数 / auto_retry 次数分别归一为
+// 最高等级,reason 记录最严重成因;调用方只持久化最终一次,不逐流式 delta 追加快照。
+export function healthLevelFor(probe: MemberHealthProbe): { level: HealthLevel; reason?: string } {
+	const t = MEMBER_HEALTH_THRESHOLDS;
+	let level: HealthLevel = "NORMAL";
+	let reason: string | undefined;
+	if (probe.toolErrors >= t.toolErrorCritical) {
+		level = "CRITICAL";
+		reason = `${probe.toolErrors} consecutive tool errors in the round (alert only; no auto steer/stop/kill).`;
+	} else if (probe.toolErrors >= t.toolErrorDegraded) {
+		level = "DEGRADED";
+		reason = `${probe.toolErrors} consecutive tool errors in the round (alert only; no auto steer/stop/kill).`;
+	} else if (probe.toolErrors >= t.toolErrorElevated) {
+		level = "ELEVATED";
+		reason = `${probe.toolErrors} consecutive tool errors in the round (alert only; no auto steer/stop/kill).`;
+	}
+	if (probe.autoRetries >= t.autoRetryCritical && HEALTH_RANK[level] < HEALTH_RANK.CRITICAL) {
+		level = "CRITICAL";
+		reason = `${probe.autoRetries} auto-retries in the round (alert only; no auto steer/stop/kill).`;
+	}
+	if (probe.repeatedTool && probe.repeatedToolRuns >= t.repeatedToolDegraded && HEALTH_RANK[level] < HEALTH_RANK.DEGRADED) {
+		level = "DEGRADED";
+		reason = `tool ${probe.repeatedTool} ran ${probe.repeatedToolRuns}x in the round (alert only; no auto steer/stop/kill).`;
+	} else if (probe.repeatedTool && probe.repeatedToolRuns >= t.repeatedToolElevated && HEALTH_RANK[level] < HEALTH_RANK.ELEVATED) {
+		level = "ELEVATED";
+		reason = `tool ${probe.repeatedTool} ran ${probe.repeatedToolRuns}x in the round (alert only; no auto steer/stop/kill).`;
+	}
+	return { level, reason };
 }
 
 function usageDelta(before: RpcStats, after: RpcStats): UsageTotals {
@@ -1086,6 +1251,12 @@ export interface ReportRequest {
 	kind: PendingRequest["kind"];
 	text: string;
 }
+// 受控异步消息:目标必须是同一已注册计划中的成员,parse 阶段只做形态校验,
+// 入队时再由 runtime 校验计划成员资格并施加上限。
+export interface ReportMessage {
+	to: string;
+	text: string;
+}
 export interface ExecutionEnvelope {
 	type: "execution";
 	taskId: string;
@@ -1093,6 +1264,7 @@ export interface ExecutionEnvelope {
 	summary: string;
 	evidence: string[];
 	requests: ReportRequest[];
+	messages?: ReportMessage[];
 }
 export interface ReviewEnvelope {
 	type: "review";
@@ -1100,6 +1272,7 @@ export interface ReviewEnvelope {
 	summary: string;
 	evidence: string[];
 	requests: ReportRequest[];
+	messages?: ReportMessage[];
 	decisions: Array<{ taskId: string; verdict: "VERIFIED" | "FIX_REQUIRED"; fix_prompt?: string }>;
 }
 export interface ExpertEnvelope {
@@ -1108,6 +1281,7 @@ export interface ExpertEnvelope {
 	summary: string;
 	evidence: string[];
 	requests: ReportRequest[];
+	messages?: ReportMessage[];
 }
 export type ReportEnvelope = ExecutionEnvelope | ReviewEnvelope | ExpertEnvelope;
 
@@ -1147,6 +1321,20 @@ function parseRequests(value: unknown): ReportRequest[] {
 	});
 }
 
+function parseMemberMessages(value: unknown): ReportMessage[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > MAX_REPORT_MESSAGES) {
+		throw new ReportEnvelopeError(`messages must contain at most ${MAX_REPORT_MESSAGES} items.`);
+	}
+	return value.map((item, index) => {
+		const message = reportRecord(item, `messages[${index}]`);
+		exactKeys(message, ["to", "text"], `messages[${index}]`);
+		const to = boundedString(message.to, `messages[${index}].to`, 64);
+		if (!ID_PATTERN.test(to)) throw new ReportEnvelopeError(`messages[${index}].to is not a valid member id.`);
+		return { to, text: boundedString(message.text, `messages[${index}].text`, MAX_MEMBER_MESSAGE_CHARS) };
+	});
+}
+
 export function parseReportEnvelope(output: string, expectedType: ReportEnvelope["type"]): ReportEnvelope {
 	const lines = output.trimEnd().split(/\r?\n/u);
 	const tail = lines.at(-1)?.trim();
@@ -1166,8 +1354,9 @@ export function parseReportEnvelope(output: string, expectedType: ReportEnvelope
 	const summary = boundedString(report.summary, "summary", 2000);
 	const evidence = boundedStrings(report.evidence, "evidence", 20, 1000);
 	const requests = parseRequests(report.requests);
+	const messages = parseMemberMessages(report.messages);
 	if (expectedType === "execution") {
-		exactKeys(report, ["type", "taskId", "status", "summary", "evidence", "requests"], "execution report");
+		exactKeys(report, ["type", "taskId", "status", "summary", "evidence", "requests", "messages"], "execution report");
 		if (report.status !== "SUBMITTED" && report.status !== "BLOCKED") throw new ReportEnvelopeError("Execution status must be SUBMITTED or BLOCKED.");
 		return {
 			type: "execution",
@@ -1176,19 +1365,21 @@ export function parseReportEnvelope(output: string, expectedType: ReportEnvelope
 			summary,
 			evidence,
 			requests,
+			messages,
 		};
 	}
 	if (expectedType === "expert") {
-		exactKeys(report, ["type", "expertRoundId", "summary", "evidence", "requests"], "expert report");
+		exactKeys(report, ["type", "expertRoundId", "summary", "evidence", "requests", "messages"], "expert report");
 		return {
 			type: "expert",
 			expertRoundId: boundedString(report.expertRoundId, "expertRoundId", 64),
 			summary,
 			evidence,
 			requests,
+			messages,
 		};
 	}
-	exactKeys(report, ["type", "reviewRoundId", "summary", "evidence", "requests", "decisions"], "review report");
+	exactKeys(report, ["type", "reviewRoundId", "summary", "evidence", "requests", "messages", "decisions"], "review report");
 	if (!Array.isArray(report.decisions) || report.decisions.length < 1 || report.decisions.length > MAX_PARALLEL_TASKS) {
 		throw new ReportEnvelopeError(`decisions must contain 1-${MAX_PARALLEL_TASKS} items.`);
 	}
@@ -1211,6 +1402,7 @@ export function parseReportEnvelope(output: string, expectedType: ReportEnvelope
 		summary,
 		evidence,
 		requests,
+		messages,
 		decisions,
 	};
 }
@@ -1361,6 +1553,13 @@ export class TeamRuntime {
 		if (params.action === "kill") return this.killResult(teamId, params.member?.id, ctx);
 		if (params.action === "cancel") return this.cancelResult(teamId, params.taskIds as string[], ctx);
 		if (this.readOnlyError) throw new TeamStateError(this.readOnlyError);
+		// Leader 控制面与请求生命周期:不依赖模型核验的 compatibility 通道。
+		// steer 只作用于正在运行成员的 Pi 公开 steer RPC;pause/answer/resolve 需要
+		// 持久化,故在 readOnlyError 之后;全部校验已在 validateToolRequest 完成。
+		if (params.action === "steer") return this.steerResult(teamId, (params.member as MemberInput).id, params.message as string, ctx);
+		if (params.action === "pause") return this.pauseResult(teamId, params.taskId as string, ctx);
+		if (params.action === "answer-request") return this.answerRequestResult(teamId, params.requestId as string, params.answer as string, ctx);
+		if (params.action === "resolve-request") return this.resolveRequestResult(teamId, params.requestId as string, ctx);
 		this.lastCompatibility = await this.compatibility.featureCheck(ctx.capabilities);
 		if (!this.lastCompatibility.ok) {
 			await this.compatibility.ensureCompatible(ctx.cwd, ctx.capabilities);
@@ -1384,8 +1583,8 @@ export class TeamRuntime {
 			return this.waitResult(teamId, (params.member as MemberInput).id, params.timeout, ctx, signal);
 		}
 		const detached = params.background !== false;
-		const dispatch = params.action === "run" || params.action === "parallel"
-			? this.preflightExecutionDispatch(teamId, params.action === "run" ? [params.taskId as string] : params.taskIds as string[], ctx)
+		const dispatch = params.action === "run" || params.action === "resume" || params.action === "parallel"
+			? this.preflightExecutionDispatch(teamId, params.action === "parallel" ? params.taskIds as string[] : [params.taskId as string], ctx)
 			: params.action === "review"
 				? this.preflightReviewDispatch(teamId, params.reviewRoundId as string, params.taskIds as string[], ctx)
 				: this.preflightExpertDispatch(
@@ -1429,7 +1628,7 @@ export class TeamRuntime {
 			throw error;
 		}
 		const results =
-			params.action === "run"
+			params.action === "run" || params.action === "resume"
 				? [
 						await this.runMember(
 							teamId,
@@ -1446,7 +1645,7 @@ export class TeamRuntime {
 		const response = this.resultsResponse(params.action, results, ctx);
 		if (
 			detached &&
-			["run", "parallel", "review", "expert"].includes(params.action) &&
+			["run", "parallel", "review", "expert", "resume"].includes(params.action) &&
 			results.length > 0 &&
 			results.every((result) => result.status === "RUNNING")
 		) {
@@ -1511,14 +1710,32 @@ export class TeamRuntime {
 			const dependencySummaries = Object.fromEntries(task.dependsOn.map((id) => [id, team.executionTasks[id].lastSummary ?? "Verified dependency; no summary recorded."]));
 			const packet = { ...task.packet, dependencySummaries };
 			packets.set(task.id, packet);
+			// 一次性注入:接收者(本任务成员)的未送达受控消息与已答复请求答案。
+			// 注入不创建任务、不改变 owned paths、不触发任何自动 dispatch。
+			const messages = this.collectMemberMessages(team, task.memberId);
+			const answers = this.collectRequestAnswers(team, task.memberId);
 			const prompt = [
 				`Execute planned task ${task.id}, attempt ${task.attempt + 1}. The runtime TeamState and this TaskPacket are authoritative; do not consult legacy shared coordination files.`,
+				messages.length > 0
+					? `Controlled messages from planned members to you (one-time injection; reply inside your report only):\n${messages
+							.map((message) => `- [${message.fromType}/${message.fromId}] ${message.text}`)
+							.join("\n")}`
+					: "",
+				answers.length > 0
+					? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
+					: "",
 				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packet }, null, 2) + "\n```",
 				task.status === "FIX_REQUIRED" ? `Reviewer fix_prompt (execute verbatim, do not broaden scope):\n${task.fixPrompt ?? ""}` : "",
 				packet.outputContract,
 				EVIDENCE_GUIDELINE,
 			].filter(Boolean).join("\n\n");
-			return { member: { id: task.memberId }, task: prompt, target: { team: teamId, type: "execution", id: task.id } };
+			return {
+				member: { id: task.memberId },
+				task: prompt,
+				target: { team: teamId, type: "execution", id: task.id },
+				messageIds: messages.map((message) => message.id),
+				requestIds: answers.map((request) => request.id),
+			};
 		});
 		return {
 			tasks,
@@ -1557,8 +1774,18 @@ export class TeamRuntime {
 		)
 			? team.plan.acceptance
 			: undefined;
+		const messages = this.collectMemberMessages(team, reviewer.id);
+		const answers = this.collectRequestAnswers(team, reviewer.id);
 		const prompt = [
 			`Review planned tasks in ReviewRound ${roundId}. You are the only role authorized to decide VERIFIED or FIX_REQUIRED. Do not modify deliverables.`,
+			messages.length > 0
+				? `Controlled messages from planned members to you (one-time injection; report decisions only):\n${messages
+						.map((message) => `- [${message.fromType}/${message.fromId}] ${message.text}`)
+						.join("\n")}`
+				: "",
+			answers.length > 0
+				? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
+				: "",
 			"```json\n" + JSON.stringify({
 				reviewRoundId: roundId,
 				targets: targets.map((task) => ({
@@ -1573,7 +1800,15 @@ export class TeamRuntime {
 			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {
-			tasks: [{ member: { id: reviewer.id }, task: prompt, target: { team: teamId, type: "review", id: roundId } }],
+			tasks: [
+				{
+					member: { id: reviewer.id },
+					task: prompt,
+					target: { team: teamId, type: "review", id: roundId },
+					messageIds: messages.map((message) => message.id),
+					requestIds: answers.map((request) => request.id),
+				},
+			],
 			activate: () => {
 				team.reviewRounds[roundId] = {
 					id: roundId,
@@ -1617,14 +1852,32 @@ export class TeamRuntime {
 			}
 			return task;
 		});
+		const messages = this.collectMemberMessages(team, expert.id);
+		const answers = this.collectRequestAnswers(team, expert.id);
 		const prompt = [
 			`Perform read-only ${kind} ExpertRound ${roundId}. Do not modify deliverables and do not change task verification state.`,
+			messages.length > 0
+				? `Controlled messages from planned members to you (one-time injection; report suggestions only):\n${messages
+						.map((message) => `- [${message.fromType}/${message.fromId}] ${message.text}`)
+						.join("\n")}`
+				: "",
+			answers.length > 0
+				? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
+				: "",
 			"```json\n" + JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2) + "\n```",
 			'End with one single-line JSON object: {"agent_team_report":{"type":"expert","expertRoundId":"<id>","summary":"...","evidence":["..."],"requests":[]}}',
 			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {
-			tasks: [{ member: { id: expert.id }, task: prompt, target: { team: teamId, type: "expert", id: roundId } }],
+			tasks: [
+				{
+					member: { id: expert.id },
+					task: prompt,
+					target: { team: teamId, type: "expert", id: roundId },
+					messageIds: messages.map((message) => message.id),
+					requestIds: answers.map((request) => request.id),
+				},
+			],
 			activate: () => {
 				team.expertRounds[roundId] = {
 					id: roundId,
@@ -1641,23 +1894,128 @@ export class TeamRuntime {
 		};
 	}
 
+	/**
+	 * 接收者下一次显式 dispatch 的一次性注入源:未送达受控消息(仅同一已注册计划
+	 * 内目标成员)与 ANSWERED 请求答案。注入后由 prompt 接受回调标记送达/解决;
+	 * 未被接受则原样保留,绝不自动重放或触碰其他成员。
+	 */
+	private collectMemberMessages(team: TeamRecord, memberId: string): MemberMessage[] {
+		return (team.memberMessages ?? []).filter((message) => message.to === memberId && !message.deliveredAt);
+	}
+
+	private requestSourceMemberId(team: TeamRecord, request: PendingRequest): string | undefined {
+		if (request.fromType === "execution") return team.executionTasks[request.fromId]?.memberId;
+		if (request.fromType === "review") return team.reviewRounds[request.fromId]?.reviewerId;
+		return team.expertRounds[request.fromId]?.expertId;
+	}
+
+	private collectRequestAnswers(team: TeamRecord, memberId: string): PendingRequest[] {
+		return team.pendingRequests.filter(
+			(request) =>
+				request.status === "ANSWERED" &&
+				request.answer !== undefined &&
+				this.requestSourceMemberId(team, request) === memberId,
+		);
+	}
+
 	private replacePendingRequests(
 		team: TeamRecord,
 		fromType: PendingRequest["fromType"],
 		fromId: string,
 		requests: ReportRequest[],
 	): PendingRequest[] {
-		team.pendingRequests = team.pendingRequests.filter((request) => request.fromType !== fromType || request.fromId !== fromId);
-		const added = requests.map((request, index): PendingRequest => ({
-			id: `${fromType}:${fromId}:${index + 1}`,
-			fromType,
-			fromId,
-			kind: request.kind,
-			text: request.text,
-			createdAt: this.now(),
-		}));
-		team.pendingRequests.push(...added);
+		// 生命周期:同源旧请求(OPEN/ANSWERED)保留作续答与答案注入,新回报去重后以
+		// OPEN 追加;RESOLVED 审计记录与超限最老请求按从旧到新裁剪,避免无界增长。
+		const pool = team.pendingRequests;
+		const previous = pool.filter((request) => request.fromType === fromType && request.fromId === fromId);
+		let sequence = previous.length;
+		const added: PendingRequest[] = [];
+		for (const request of requests) {
+			if (
+				previous.some(
+					(candidate) => candidate.kind === request.kind && candidate.text === request.text && candidate.status !== "RESOLVED",
+				) ||
+				added.some((candidate) => candidate.kind === request.kind && candidate.text === request.text)
+			) {
+				continue;
+			}
+			sequence++;
+			added.push({
+				id: `${fromType}:${fromId}:${sequence}`,
+				fromType,
+				fromId,
+				kind: request.kind,
+				text: request.text,
+				createdAt: this.now(),
+				status: "OPEN",
+			});
+		}
+		const next = [...pool, ...added];
+		if (next.length > MAX_PENDING_REQUESTS) {
+			const resolved = next.filter((request) => request.status === "RESOLVED");
+			const kept = next.filter((request) => request.status !== "RESOLVED");
+			let final = [...resolved.slice(next.length - MAX_PENDING_REQUESTS), ...kept];
+			if (final.length > MAX_PENDING_REQUESTS) final = final.slice(final.length - MAX_PENDING_REQUESTS);
+			team.pendingRequests = final;
+		} else {
+			team.pendingRequests = next;
+		}
 		return added;
+	}
+
+	/**
+	 * 受控异步消息入队(审计):仅同一已注册计划中的目标成员,受数量/长度/队列上限
+	 * 约束,不创建任务、不改变 owned paths、不触发自动 dispatch、不注入其他成员。
+	 * 返回实际入队条数;超限消息被拒绝并保留来源报告,供 Leader 在状态中核对。
+	 */
+	private enqueueMemberMessages(
+		team: TeamRecord,
+		fromType: PendingRequest["fromType"],
+		fromId: string,
+		messages: ReportMessage[],
+	): number {
+		const pool = (team.memberMessages ??= []);
+		let accepted = 0;
+		for (const message of messages) {
+			if (!team.plan || !team.plan.memberKinds[message.to]) continue;
+			const pending = pool.filter((candidate) => candidate.to === message.to && !candidate.deliveredAt).length;
+			if (pending >= MAX_MEMBER_MESSAGE_QUEUE_PER_RECEIVER) continue;
+			if (pool.length >= MAX_MEMBER_MESSAGE_QUEUE) {
+				const deliveredIndex = pool.findIndex((candidate) => candidate.deliveredAt);
+				if (deliveredIndex < 0) continue; // 未送达队列已满:拒绝新消息,不驱逐未送达记录
+				pool.splice(deliveredIndex, 1);
+			}
+			pool.push({
+				id: this.uuid(),
+				to: message.to,
+				fromType,
+				fromId,
+				text: message.text,
+				createdAt: this.now(),
+			});
+			accepted++;
+		}
+		return accepted;
+	}
+
+	/**
+	 * 仅在接收者本次显式 dispatch 的 prompt 被接受后调用:标记注入消息已送达
+	 * (保留审计),并将已注入答案的请求推进为 RESOLVED;未接受则一切保留。
+	 */
+	private resolveInjected(team: TeamRecord, messageIds: string[] | undefined, requestIds: string[] | undefined): void {
+		if (messageIds?.length) {
+			for (const message of team.memberMessages ?? []) {
+				if (messageIds.includes(message.id) && !message.deliveredAt) message.deliveredAt = this.now();
+			}
+		}
+		if (requestIds?.length) {
+			for (const request of team.pendingRequests) {
+				if (requestIds.includes(request.id) && request.status === "ANSWERED") {
+					request.status = "RESOLVED";
+					request.resolvedAt = this.now();
+				}
+			}
+		}
 	}
 
 	private refreshReadyTasks(team: TeamRecord): void {
@@ -1716,6 +2074,7 @@ export class TeamRuntime {
 					delete task.fixPrompt;
 				}
 				const requests = this.replacePendingRequests(team, "execution", task.id, envelope.requests);
+				this.enqueueMemberMessages(team, "execution", task.id, envelope.messages ?? []);
 				return this.deltaFor(team, { type: "execution", id: task.id, status: task.status }, envelope.summary, requests, outputPath);
 			}
 			if (target.type === "review") {
@@ -1747,6 +2106,7 @@ export class TeamRuntime {
 				delete round.lastIssue;
 				this.refreshReadyTasks(team);
 				const requests = this.replacePendingRequests(team, "review", round.id, envelope.requests);
+				this.enqueueMemberMessages(team, "review", round.id, envelope.messages ?? []);
 				return this.deltaFor(team, { type: "review", id: round.id, status: round.status }, envelope.summary, requests, outputPath);
 			}
 			const round = team.expertRounds[target.id];
@@ -1759,6 +2119,7 @@ export class TeamRuntime {
 			round.updatedAt = this.now();
 			delete round.lastIssue;
 			const requests = this.replacePendingRequests(team, "expert", round.id, envelope.requests);
+			this.enqueueMemberMessages(team, "expert", round.id, envelope.messages ?? []);
 			return this.deltaFor(team, { type: "expert", id: round.id, status: round.status }, envelope.summary, requests, outputPath);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
@@ -2218,6 +2579,33 @@ export class TeamRuntime {
 		// INTERRUPTED exactly once, and stop/kill can await the active-slot release.
 		let interrupted = false;
 		let resolveCompleted!: () => void;
+		// 本轮健康探针:只在内存累计事件证据,由 settleAndFinish 在最终化时一次性
+		// 写入 MemberHealth —— 绝不因流式 delta 逐条追加 TeamState 快照。
+		let probe: MemberHealthProbe = zeroHealthProbe();
+		let consecutiveToolErrors = 0;
+		const toolRunCounts = new Map<string, number>();
+		const recordProbeEvent = (event: any) => {
+			const now = this.now();
+			probe = { ...probe, lastEventType: String(event?.type ?? ""), lastEventAt: now };
+			if (event?.type === "tool_execution_start" && typeof event.toolName === "string") {
+				const runs = (toolRunCounts.get(event.toolName) ?? 0) + 1;
+				toolRunCounts.set(event.toolName, runs);
+				probe = {
+					...probe,
+					lastTool: event.toolName,
+					lastToolAt: now,
+					repeatedTool: runs >= probe.repeatedToolRuns ? event.toolName : probe.repeatedTool,
+					repeatedToolRuns: Math.max(probe.repeatedToolRuns, runs),
+				};
+			}
+			if (event?.type === "tool_execution_end") {
+				consecutiveToolErrors = event.isError === true ? consecutiveToolErrors + 1 : 0;
+				probe = { ...probe, toolErrors: Math.max(probe.toolErrors, consecutiveToolErrors) };
+			}
+			if (event?.type === "auto_retry_start") {
+				probe = { ...probe, autoRetries: probe.autoRetries + 1 };
+			}
+		};
 		const reportProgress = (text: string) => {
 			// Progress reporting must never break member execution; the tool may already
 			// have returned (detached runs) and the caller's onUpdate can be invalidated.
@@ -2298,11 +2686,13 @@ export class TeamRuntime {
 			this.persist(ctx);
 			view?.write({ type: "status", status: "RUNNING" });
 			unsubscribe = client.onEvent((event) => {
+				recordProbeEvent(event);
 				if (event?.type === "message_end" && event.message?.role === "assistant") {
 					if (!firstAssistantChecked) {
 						firstAssistantChecked = true;
 						const expected = `${member.model.provider}/${member.model.id}`;
 						const actual = assistantMessageModel(event.message);
+						probe = { ...probe, firstReplyModel: actual ?? undefined };
 						if (actual !== expected) {
 							responseError = `First assistant response model mismatch: expected ${expected}, got ${actual ?? "<missing>"}.`;
 						}
@@ -2340,6 +2730,17 @@ export class TeamRuntime {
 			}
 			await client.prompt(item.task);
 			accepted = true;
+			// 送达/解决标记只在 prompt 被接受后发生;失败路径保留注入内容,下次显式
+			// dispatch 再次注入(绝不自动重放,也绝不标记未接受的送达)。
+			const teamNow = this.state.teams[teamId];
+			if (teamNow && (item.messageIds?.length || item.requestIds?.length)) {
+				this.resolveInjected(teamNow, item.messageIds, item.requestIds);
+				try {
+					this.persist(ctx);
+				} catch {
+					// read-only state: delivery markers stay in-memory
+				}
+			}
 			await onPromptSettled?.(true);
 			// A kill racing prompt acceptance marks the member STOPPED; never let this
 			// run proceed (no settle wait, no replay) once the kill is visible.
@@ -2364,6 +2765,7 @@ export class TeamRuntime {
 					() => interrupted,
 					() => responseError ?? (firstAssistantChecked ? undefined : "First assistant response model metadata was not observed."),
 					item.target,
+					() => probe,
 					() => {
 						this.runControls.delete(key);
 						this.runTargets.delete(key);
@@ -2489,6 +2891,7 @@ export class TeamRuntime {
 		interrupted: () => boolean,
 		getResponseError: () => string | undefined,
 		target: RunTarget | undefined,
+		probe: () => MemberHealthProbe,
 		onComplete: () => void,
 	): Promise<MemberRunResult> {
 		const teamId = member.team;
@@ -2523,6 +2926,8 @@ export class TeamRuntime {
 			const usage = usageDelta(before, after);
 			member.status = interrupted() || signal?.aborted ? "INTERRUPTED" : "IDLE";
 			member.idleSinceMs = Date.now();
+			// 健康快照与状态变更同时一次性持久化(不逐流式 delta 追加快照)。
+			this.applyHealthSnapshot(member, probe(), usage, after.contextUsage);
 			// 仅超长时落盘(用户确认):输出超过限制被截断时,完整版写入 members/<id>/output.md
 			let outputPath: string | undefined;
 			if (Buffer.byteLength(output, "utf8") > MAX_MEMBER_OUTPUT_BYTES) {
@@ -2572,6 +2977,7 @@ export class TeamRuntime {
 			// and keep the child client alive for the next run (Esc semantics).
 			member.status = !interrupted() && error instanceof MemberResponseError ? "ERROR" : "INTERRUPTED";
 			member.idleSinceMs = Date.now();
+			this.applyHealthSnapshot(member, probe(), zeroUsage(), undefined);
 			// settleAndFinish only runs after the prompt was accepted, so these failures
 			// always carry the "not replayed" marker, matching the historical message.
 			member.lastError = `Prompt accepted; not replayed. ${
@@ -2590,6 +2996,49 @@ export class TeamRuntime {
 			settleWait.cancel();
 			onComplete();
 		}
+	}
+
+	/**
+	 * 将本轮探针证据合并进 MemberHealth(仅告警):记录三层模型证据、最后事件/工具、
+	 * 本轮用量与 Context 占用;固定阈值评估等级只升不降,原因保留最严重成因。
+	 * 绝不在此处调用 steer/abort/stop/kill 或触发任何自动派发。
+	 */
+	private applyHealthSnapshot(
+		member: MemberState,
+		probe: MemberHealthProbe,
+		usage: UsageTotals,
+		contextUsage?: { tokens: number | null; contextWindow: number; contextPercent: number | null },
+	): void {
+		const { level, reason } = healthLevelFor(probe);
+		const previous = member.health;
+		const mergedLevel = previous && HEALTH_RANK[level] < HEALTH_RANK[previous.level] ? previous.level : level;
+		const mergedReason = mergedLevel === previous?.level && previous.levelReason ? previous.levelReason : reason;
+		const configured = `${member.model.provider}/${member.model.id}`;
+		member.health = {
+			configModel: configured,
+			rpcModel: previous?.rpcModel ?? configured,
+			firstReplyModel: probe.firstReplyModel ?? previous?.firstReplyModel,
+			lastEventType: probe.lastEventType || previous?.lastEventType,
+			lastTool: probe.lastTool || previous?.lastTool,
+			lastEventAt: probe.lastEventAt || previous?.lastEventAt,
+			lastToolAt: probe.lastToolAt || previous?.lastToolAt,
+			consecutiveToolErrors: probe.toolErrors,
+			repeatedTool:
+				probe.repeatedTool && probe.repeatedToolRuns >= MEMBER_HEALTH_THRESHOLDS.repeatedToolElevated ? probe.repeatedTool : undefined,
+			repeatedToolRuns: probe.repeatedToolRuns,
+			autoRetries: probe.autoRetries,
+			usage,
+			context: contextUsage
+				? {
+						contextWindow: contextUsage.contextWindow,
+						contextTokens: contextUsage.tokens ?? null,
+						contextPercent: contextUsage.percent ?? null,
+					}
+				: previous?.context,
+			level: mergedLevel,
+			levelReason: mergedReason,
+			updatedAt: this.now(),
+		};
 	}
 
 	/**
@@ -2717,6 +3166,22 @@ export class TeamRuntime {
 			if (reported !== expected) {
 				throw new Error(`Child model mismatch: expected ${expected}, got ${reported ?? "<missing>"}.`);
 			}
+			// 三层模型证据之 RPC 层:child getState 已通过严格比对,持久化为健康快照基线。
+			if (!member.health) {
+				member.health = {
+					configModel: expected,
+					rpcModel: reported ?? expected,
+					consecutiveToolErrors: 0,
+					repeatedToolRuns: 0,
+					autoRetries: 0,
+					usage: zeroUsage(),
+					level: "NORMAL",
+					updatedAt: this.now(),
+				};
+			} else {
+				member.health.configModel = expected;
+				member.health.rpcModel = reported ?? expected;
+			}
 			this.clients.set(key, handle.client);
 			// Same race guard: keep STOPPED so runMember's post-start check aborts the
 			// dispatch instead of resuming a killed member.
@@ -2817,6 +3282,117 @@ export class TeamRuntime {
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: { action: "kill", warning: this.persistenceWarning(ctx) },
+		};
+	}
+
+	/**
+	 * Leader steer: 对正在运行成员的受控短消息注入(Pi 公开 steer RPC)。只允许
+	 * RUNNING 成员(active slot 持有者),不创建任务、不改 owned paths、不触发任何
+	 * 自动 dispatch;client 无公开 steer 能力时显式拒绝,不伪造冻结 RPC。
+	 */
+	private async steerResult(teamId: string, id: string, message: string, ctx: RuntimeContext): Promise<RuntimeToolResult> {
+		const member = this.state.teams[teamId]?.members[id];
+		if (!member) throw new TeamInputError(`Unknown member ${teamId}/${id}.`);
+		const key = memberKey(teamId, id);
+		if (!this.active.has(key)) {
+			throw new TeamInputError(`Member ${teamId}/${id} is not running; steer only injects into an active run.`);
+		}
+		const client = this.clients.get(key);
+		if (!client?.steer) throw new TeamInputError(`The live Pi RPC client for ${teamId}/${id} does not expose public steer; cannot inject.`);
+		await client.steer(message);
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Steered ${teamId}/${id}: ${message.length > 200 ? `${message.slice(0, 200)}…` : message}`,
+				},
+			],
+			details: { action: "steer", warning: this.persistenceWarning(ctx) },
+		};
+	}
+
+	/**
+	 * pause: 现有 abort 软中断(Esc 语义)的显式入口,以 execution task 为目标。
+	 * 复用 runControl.stop(),child client/session/authorization/Dashboard 全部保留,
+	 * 成员收尾为 INTERRUPTED,任务进入 BLOCKED(绝不重放);等待竞态 run 的收尾以
+	 * 释放 active slot。resume(taskId) 由 Leader 显式重新派发同一任务。
+	 */
+	private async pauseResult(teamId: string, taskId: string, ctx: RuntimeContext): Promise<RuntimeToolResult> {
+		const team = this.state.teams[teamId];
+		const task = team?.executionTasks[taskId];
+		if (!task) throw new TeamInputError(`Unknown execution task ${teamId}/${taskId}.`);
+		if (task.status !== "RUNNING") {
+			throw new TeamInputError(`Task ${taskId} is ${task.status}; only a RUNNING task can be paused.`);
+		}
+		const member = team!.members[task.memberId];
+		const key = memberKey(teamId, task.memberId);
+		const control = this.runControls.get(key);
+		if (!control) {
+			throw new TeamInputError(`Task ${taskId} owner ${task.memberId} has no accepted run control yet; cannot pause now.`);
+		}
+		control.stop();
+		await control.completed;
+		if (!this.readOnlyError) this.persist(ctx);
+		const after = this.state.teams[teamId]?.executionTasks[taskId] ?? task;
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Paused ${taskId} (${member?.id ?? task.memberId}): ${after.status}. Soft interrupt only; child and session are kept. Call resume with taskId to explicitly re-dispatch (attempt ${task.attempt + 1}); nothing is replayed automatically.`,
+				},
+			],
+			details: { action: "pause", warning: this.persistenceWarning(ctx) },
+		};
+	}
+
+	/**
+	 * answer-request: Leader 对 OPEN 请求注入答案并推进到 ANSWERED;只有发起者自身
+	 * 的下一次显式 dispatch 才会注入该答案(注入后转为 RESOLVED)。
+	 */
+	private async answerRequestResult(teamId: string, requestId: string, answer: string, ctx: RuntimeContext): Promise<RuntimeToolResult> {
+		const team = this.state.teams[teamId];
+		const request = team?.pendingRequests.find((candidate) => candidate.id === requestId);
+		if (!request) throw new TeamInputError(`Unknown pending request ${teamId}/${requestId}.`);
+		if (request.status !== "OPEN") {
+			throw new TeamInputError(`Request ${requestId} is ${request.status}; only OPEN requests can be answered.`);
+		}
+		request.status = "ANSWERED";
+		request.answer = answer;
+		request.answeredAt = this.now();
+		if (!this.readOnlyError) this.persist(ctx);
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Answered ${requestId} [${request.kind}] from ${request.fromType}/${request.fromId}: ${answer.length > 200 ? `${answer.slice(0, 200)}…` : answer}. The answer is injected only into that source's next explicit dispatch.`,
+				},
+			],
+			details: { action: "answer-request", warning: this.persistenceWarning(ctx) },
+		};
+	}
+
+	/**
+	 * resolve-request: Leader 显式关闭 OPEN/ANSWERED 请求(不再需要答复或注入)。
+	 * 已 RESOLVED 的请求拒绝重复操作;答案注入消费走同一 RESOLVED 终态。
+	 */
+	private async resolveRequestResult(teamId: string, requestId: string, ctx: RuntimeContext): Promise<RuntimeToolResult> {
+		const team = this.state.teams[teamId];
+		const request = team?.pendingRequests.find((candidate) => candidate.id === requestId);
+		if (!request) throw new TeamInputError(`Unknown pending request ${teamId}/${requestId}.`);
+		if (request.status === "RESOLVED") {
+			throw new TeamInputError(`Request ${requestId} is already RESOLVED.`);
+		}
+		request.status = "RESOLVED";
+		request.resolvedAt = this.now();
+		if (!this.readOnlyError) this.persist(ctx);
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Resolved ${requestId} [${request.kind}] from ${request.fromType}/${request.fromId}; it will not be injected or re-raised.`,
+				},
+			],
+			details: { action: "resolve-request", warning: this.persistenceWarning(ctx) },
 		};
 	}
 
@@ -2957,6 +3533,7 @@ export class TeamRuntime {
 		}
 		const beforeModel = { ...member.model };
 		const beforeThinking = member.thinking;
+		const beforeHealth = member.health ? structuredClone(member.health) : undefined;
 		const client = this.clients.get(key);
 		const rollbackChild = async (): Promise<string | undefined> => {
 			if (!client) return undefined;
@@ -3018,12 +3595,29 @@ export class TeamRuntime {
 		member.model = model;
 		member.thinking = thinking;
 		member.configHash = configHash(member);
+		const configured = `${model.provider}/${model.id}`;
+		const health = member.health ?? {
+			configModel: configured,
+			consecutiveToolErrors: 0,
+			repeatedToolRuns: 0,
+			autoRetries: 0,
+			usage: zeroUsage(),
+			level: "NORMAL" as const,
+			updatedAt: this.now(),
+		};
+		health.configModel = configured;
+		health.updatedAt = this.now();
+		delete health.firstReplyModel;
+		if (client) health.rpcModel = configured;
+		else delete health.rpcModel;
+		member.health = health;
 		try {
 			this.persist(ctx);
 		} catch (error) {
 			member.model = beforeModel;
 			member.thinking = beforeThinking;
 			member.configHash = configHash(member);
+			member.health = beforeHealth;
 			await rollbackChild();
 			throw error;
 		}
@@ -3122,14 +3716,19 @@ export class TeamRuntime {
 			`Task counts: ${Object.entries(summary.taskCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
 			...current.map((item) => `Current ${item.type}/${item.id}: ${item.status} member=${item.memberId}`),
 			...blocked.map((item) => `Blocked ${item.id}: ${item.status}${item.issue ? ` - ${item.issue}` : ""}`),
-			...summary.requests.map((request) => `Request ${request.id}: ${request.kind} - ${request.text}`),
+			...summary.requests
+				.filter((request) => request.status !== "RESOLVED")
+				.map((request) => `Request ${request.id}: [${request.status}] ${request.kind} - ${request.text}`),
 		];
 		if (full && team) {
 			lines.push("Full planned state:", JSON.stringify(team, null, 2));
 		} else if (id && targets[0]) {
 			const member = targets[0];
 			const view = dashboard.members[`${member.team}/${member.id}`];
-			lines.push(`${rosterLine(member)} viewer=${view.visibility}${member.contextNote ? ` context=${member.contextNote}` : ""}`);
+			const health = member.health
+				? ` health=${member.health.level}${member.health.levelReason ? ` (${member.health.levelReason})` : ""}`
+				: "";
+			lines.push(`${rosterLine(member)} viewer=${view.visibility}${health}${member.contextNote ? ` context=${member.contextNote}` : ""}`);
 		}
 		if (this.autoApprove) lines.push("Automatic plan authorization: ON (session-scoped; USER_GATE skipped, dispatch remains explicit)");
 		if (this.readOnlyError) lines.push(`STATE ERROR: ${this.readOnlyError}`);
