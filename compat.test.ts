@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PiCompatibilityAdapter, type AdapterOverrides, type RpcClientLike } from "./compat.ts";
 
@@ -35,6 +36,24 @@ const BASE_MEMBER = {
 	trusted: true,
 	workspace: "/tmp/project/.team",
 };
+
+test("createMemberClient assembles an optional member head prompt before fixed instructions", async () => {
+	let promptPath = "";
+	const adapter = new PiCompatibilityAdapter({
+		version: "0.84.1",
+		cliPath: "/fake/pi",
+		factory: (options) => {
+			const args = options.args ?? [];
+			promptPath = args[args.indexOf("--append-system-prompt") + 1] ?? "";
+			return fakeClient();
+		},
+		listSessions: async () => [],
+	});
+	const handle = await adapter.createMemberClient({ ...BASE_MEMBER, headPrompt: "成员头部规则" });
+	const prompt = await readFile(promptPath, "utf8");
+	assert.ok(prompt.indexOf("成员头部规则") < prompt.indexOf("write only"));
+	await handle.cleanupPrompt();
+});
 
 test("createMemberClient passes --session-id only when that session file already exists", async () => {
 	const calls: Array<{ args: string[] }> = [];

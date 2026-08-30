@@ -24,9 +24,11 @@ description: Use when the main Pi needs persistent multi-agent execution for a c
 
 - 完整固定 roster；每个成员有 `kind`、`id`、`role`、`instructions`。新成员省略模型时继承主 Pi；只在用户明确指定时填写真实可用目录中的精确 canonical `provider/model`，显式无效值会报错且绝不回退。amendment 中既有成员省略模型会保留其当前持久化选择；
 - **每个成员的 `instructions` 必须是一份专门的专业角色书**，禁止一句话敷衍。写清五要素：职责与专长、边界（不碰什么/不决策什么）、行事风格、输出要求、与其他成员的协作关系；用用户的语言书写；
-- `instructions` 经 `--append-system-prompt` 原样注入成员进程，是该成员唯一的人格来源；修订已建会话成员的 instructions 会被旧历史压制，需换替补才干净生效（见 Settled JSON Contract 节末）；
+- `instructions` 经 `--append-system-prompt` 原样注入成员进程，是该成员唯一的人格来源；可选 `headPrompt` 用于长期人设/方法补充，成员可选 `tailPrompt` 用于长期收尾检查；修订已建会话成员的 instructions 会被旧历史压制，需换替补才干净生效（见 Settled JSON Contract 节末）；
+- ExecutionTask 可选 `headPrompt`/`tailPrompt` 作为当前任务的一次性追加提示词。组装顺序为成员默认提示词、任务 headPrompt、当前 TaskPacket、成员 tailPrompt、任务 tailPrompt、Runtime 强制报告协议；用户提示词不能覆盖权限边界或最终 JSON envelope；
 - 唯一 `reviewerId`；
 - 计划载荷中面向用户的业务文本（role、instructions、objective、constraints、acceptance 等）一律用简体中文书写，便于用户审阅确认门；runtime 结构标签（Team/Roster/Tasks/depends/acceptance）保持英文不动。
+- 每个 action 都有独立的严格参数形状：`run` 只传 `taskId`，`parallel` 只传 `taskIds`，`review` 传 `reviewRoundId` 与 `taskIds`，`expert` 传 `expertRoundId`、`expertId`、`taskIds`、`objective`；不要使用一个包含所有可选字段的扁平 payload；
 - ExecutionTask DAG：`id/memberId/dependsOn`；
 - 具体 cwd 相对 `ownedPaths`，以及 objective、constraints、acceptance、relevantPaths、output contract；
 - 全局 acceptance。

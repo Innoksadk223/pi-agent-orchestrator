@@ -75,6 +75,8 @@ export interface MemberConfig {
 	id: string;
 	role: string;
 	instructions: string;
+	headPrompt?: string;
+	tailPrompt?: string;
 	model: ModelRef;
 	thinking: (typeof THINKING_LEVELS)[number];
 	tools: string[];
@@ -173,6 +175,8 @@ export interface TaskPacket {
 	ownedPaths: string[];
 	acceptance: string[];
 	relevantPaths: string[];
+	headPrompt?: string;
+	tailPrompt?: string;
 	outputContract: string;
 }
 
@@ -305,6 +309,8 @@ export interface MemberInput {
 	id: string;
 	role?: string;
 	instructions?: string;
+	headPrompt?: string;
+	tailPrompt?: string;
 	model?: string;
 	thinking?: MemberConfig["thinking"];
 	tools?: string[];
@@ -325,6 +331,8 @@ export interface PlannedTaskInput {
 	ownedPaths: string[];
 	acceptance: string[];
 	relevantPaths?: string[];
+	headPrompt?: string;
+	tailPrompt?: string;
 	outputContract?: string;
 }
 
@@ -435,6 +443,8 @@ export function normalizeNewMember(
 		id: input.id,
 		role: input.role,
 		instructions: input.instructions,
+		headPrompt: input.headPrompt,
+		tailPrompt: input.tailPrompt,
 		// New members inherit the parent model only when model is omitted. Existing
 		// members keep their persisted model across unrelated plan amendments.
 		model: pickMemberModel(input.model, defaults, input.id, currentModel),
@@ -482,6 +492,8 @@ export function configHash(config: MemberConfig): string {
 				id: config.id,
 				role: config.role,
 				instructions: config.instructions,
+				headPrompt: config.headPrompt,
+				tailPrompt: config.tailPrompt,
 				model: config.model,
 				thinking: config.thinking,
 				tools: [...config.tools].sort(),
@@ -491,14 +503,15 @@ export function configHash(config: MemberConfig): string {
 }
 
 function hasConfig(input: MemberInput): boolean {
-	return [input.role, input.instructions, input.model, input.thinking, input.tools].some((value) => value !== undefined);
+	return [input.role, input.instructions, input.headPrompt, input.tailPrompt, input.model, input.thinking, input.tools].some((value) => value !== undefined);
 }
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const EVIDENCE_GUIDELINE =
-	'envelope 必须是回复的最后一个非空行，裸的单行 JSON 对象；禁止代码围栏/```、禁止 Markdown 包裹、禁止正文后留空行或注释。evidence 元素只写纯中文的路径/行号描述，必须用 path:line 冒号格式（如 src/a.ts:42，用正斜杠 /），禁止散文式「第 N 行」写法、禁止反斜杠、禁止贴代码片段、禁止照抄示例内容（flash 会复制示例代码或围栏导致 REPORT_INVALID）。';
-const DEFAULT_EXECUTION_OUTPUT_CONTRACT =
-	'End the final response with one single-line JSON object: {"agent_team_report":{"type":"execution","taskId":"<id>","status":"SUBMITTED|BLOCKED","summary":"...","evidence":["..."],"requests":[{"kind":"question|scope|dependency|human","text":"..."}]}}';
+	'envelope 必须是回复的最后一个非空行，裸的单行 JSON 对象；禁止代码围栏/```、禁止 Markdown 包裹、禁止正文后留空行或注释。evidence 元素只写纯中文的路径/行号描述，必须用 path:line 冒号格式（如 src/a.ts:42，用正斜杠 /），禁止散文式「第 N 行」写法、禁止反斜杠、禁止贴代码片段、禁止照抄示例内容。';
+function executionOutputContract(taskId: string): string {
+	return `Final non-empty line: one bare single-line JSON object with agent_team_report.type=execution, taskId exactly ${taskId}, status exactly SUBMITTED or BLOCKED, summary string, evidence array, and requests array.`;
+}
 
 export function normalizeOwnedPath(value: string): string {
 	const trimmed = value.trim();
@@ -605,9 +618,11 @@ function preparePlan(
 				ownedPaths,
 				acceptance: [...source.acceptance],
 				relevantPaths,
+				headPrompt: source.headPrompt,
+				tailPrompt: source.tailPrompt,
 				outputContract: source.outputContract
-					? `${source.outputContract}\n${DEFAULT_EXECUTION_OUTPUT_CONTRACT}`
-					: DEFAULT_EXECUTION_OUTPUT_CONTRACT,
+					? `${source.outputContract}\n${executionOutputContract(source.id)}`
+					: executionOutputContract(source.id),
 			},
 			attempt: 0,
 			updatedAt: now,
@@ -663,6 +678,8 @@ function changedConfigFields(existing: MemberState, next: MemberConfig): string[
 	const fields: string[] = [];
 	if (existing.role !== next.role) fields.push("role");
 	if (existing.instructions !== next.instructions) fields.push("instructions");
+	if (existing.headPrompt !== next.headPrompt) fields.push("headPrompt");
+	if (existing.tailPrompt !== next.tailPrompt) fields.push("tailPrompt");
 	if (existing.model.provider !== next.model.provider || existing.model.id !== next.model.id) fields.push("model");
 	if (existing.thinking !== next.thinking) fields.push("thinking");
 	if (JSON.stringify([...existing.tools].sort()) !== JSON.stringify([...next.tools].sort())) fields.push("tools");
@@ -673,7 +690,7 @@ function changedTaskFields(existing: ExecutionTask, replacement: ExecutionTask):
 	const fields: string[] = [];
 	if (existing.memberId !== replacement.memberId) fields.push("memberId");
 	if (JSON.stringify(existing.dependsOn) !== JSON.stringify(replacement.dependsOn)) fields.push("dependsOn");
-	for (const key of ["objective", "constraints", "ownedPaths", "acceptance", "relevantPaths", "outputContract"] as const) {
+	for (const key of ["objective", "constraints", "ownedPaths", "acceptance", "relevantPaths", "headPrompt", "tailPrompt", "outputContract"] as const) {
 		if (JSON.stringify(existing.packet[key]) !== JSON.stringify(replacement.packet[key])) fields.push(key);
 	}
 	return fields;
@@ -689,6 +706,8 @@ function taskBlock(task: ExecutionTask): string[] {
 		`**${task.id}** → ${task.memberId}`,
 		`  ${task.packet.objective}`,
 		`  depends: ${task.dependsOn.join(", ") || "none"} · owns: ${task.packet.ownedPaths.join(", ")}`,
+		...(task.packet.headPrompt ? ["  has task head prompt"] : []),
+		...(task.packet.tailPrompt ? ["  has task tail prompt"] : []),
 		...(task.packet.acceptance.length > 0 ? [`  acceptance: ${task.packet.acceptance.join(" | ")}`] : []),
 	];
 }
@@ -1709,13 +1728,16 @@ export class TeamRuntime {
 		const tasks = selected.map((task): DispatchTask => {
 			const dependencySummaries = Object.fromEntries(task.dependsOn.map((id) => [id, team.executionTasks[id].lastSummary ?? "Verified dependency; no summary recorded."]));
 			const packet = { ...task.packet, dependencySummaries };
+			const { headPrompt, tailPrompt, outputContract, ...packetForPrompt } = packet;
 			packets.set(task.id, packet);
+			const member = team.members[task.memberId];
 			// 一次性注入:接收者(本任务成员)的未送达受控消息与已答复请求答案。
 			// 注入不创建任务、不改变 owned paths、不触发任何自动 dispatch。
 			const messages = this.collectMemberMessages(team, task.memberId);
 			const answers = this.collectRequestAnswers(team, task.memberId);
 			const prompt = [
 				`Execute planned task ${task.id}, attempt ${task.attempt + 1}. The runtime TeamState and this TaskPacket are authoritative; do not consult legacy shared coordination files.`,
+				headPrompt ? `Task-specific head prompt:\n${headPrompt}` : "",
 				messages.length > 0
 					? `Controlled messages from planned members to you (one-time injection; reply inside your report only):\n${messages
 							.map((message) => `- [${message.fromType}/${message.fromId}] ${message.text}`)
@@ -1724,9 +1746,11 @@ export class TeamRuntime {
 				answers.length > 0
 					? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
 					: "",
-				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packet }, null, 2) + "\n```",
+				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packetForPrompt }, null, 2) + "\n```",
+				member.tailPrompt ? `Member tail prompt:\n${member.tailPrompt}` : "",
+				tailPrompt ? `Task-specific tail prompt:\n${tailPrompt}` : "",
 				task.status === "FIX_REQUIRED" ? `Reviewer fix_prompt (execute verbatim, do not broaden scope):\n${task.fixPrompt ?? ""}` : "",
-				packet.outputContract,
+				outputContract,
 				EVIDENCE_GUIDELINE,
 			].filter(Boolean).join("\n\n");
 			return {
@@ -1796,7 +1820,8 @@ export class TeamRuntime {
 				})),
 				...(finalAcceptance ? { globalAcceptance: finalAcceptance } : {}),
 			}, null, 2) + "\n```",
-			'End with one single-line JSON object: {"agent_team_report":{"type":"review","reviewRoundId":"<id>","summary":"...","evidence":["..."],"requests":[],"decisions":[{"taskId":"<id>","verdict":"VERIFIED|FIX_REQUIRED","fix_prompt":"required only for FIX_REQUIRED"}]}}',
+			reviewer.tailPrompt ? `Member tail prompt:\n${reviewer.tailPrompt}` : "",
+			`Final non-empty line: one bare single-line JSON object with agent_team_report.type=review, reviewRoundId exactly ${roundId}, summary string, evidence array, requests array, and exactly one decision for each target task; verdict is VERIFIED or FIX_REQUIRED.`,
 			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {
@@ -1865,7 +1890,8 @@ export class TeamRuntime {
 				? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
 				: "",
 			"```json\n" + JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2) + "\n```",
-			'End with one single-line JSON object: {"agent_team_report":{"type":"expert","expertRoundId":"<id>","summary":"...","evidence":["..."],"requests":[]}}',
+			expert.tailPrompt ? `Member tail prompt:\n${expert.tailPrompt}` : "",
+			`Final non-empty line: one bare single-line JSON object with agent_team_report.type=expert, expertRoundId exactly ${roundId}, summary string, evidence array, and requests array.`,
 			EVIDENCE_GUIDELINE,
 		].join("\n\n");
 		return {

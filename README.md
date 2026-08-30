@@ -32,7 +32,7 @@ agent_team({
 })
 ```
 
-一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。新成员省略 `model` 时继承主 Pi；只有用户明确要求覆盖时才填写真实可用目录中的精确 canonical `provider/model`，显式无效值会在任何持久化或 child 副作用前报错，绝不回退主模型。amendment 中既有成员省略 `model` 会保留其当前持久化选择，显式填写才切换。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订（指令/任务/验收编辑）与既有成员的持续派发静默复用已批准授权。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
+一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`agent_team` 的每个 action 使用独立的严格参数形状：`run` 只接 `taskId`，`parallel` 只接 `taskIds`，`review` 只接 `reviewRoundId`/`taskIds`，`expert` 只接对应 round、member、taskIds 和 objective；不要把其他 action 字段混入调用。成员可选 `headPrompt`/`tailPrompt` 作为长期提示词，任务可选同名字段作为一次性追加提示词；Runtime 的报告协议始终强制放在最终尾部。新成员省略 `model` 时继承主 Pi；只有用户明确要求覆盖时才填写真实可用目录中的精确 canonical `provider/model`，显式无效值会在任何持久化或 child 副作用前报错，绝不回退主模型。amendment 中既有成员省略 `model` 会保留其当前持久化选择，显式填写才切换。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订（指令/任务/验收编辑）与既有成员的持续派发静默复用已批准授权。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
 
 TUI 中该确认使用有界审阅视窗：`Approve` / `Reject` 固定可见，`↑` / `↓` / `PageUp` / `PageDown` 滚动正文，`←` / `→` 或 `Tab` 切换选项，`Enter` 确认当前选中项，`Esc` / `Ctrl+C` 始终拒绝，倒计时归零未操作则默认 Approve；正文为标准 Markdown（节标题/列表/加粗），TUI 端解析为主题色样式，IDE/RPC 端可直接渲染 MD，溢出时右缘显示滚动条。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
 

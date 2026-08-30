@@ -68,6 +68,8 @@ export interface PersistentMemberOptions {
 	id: string;
 	role: string;
 	instructions: string;
+	headPrompt?: string;
+	tailPrompt?: string;
 	sessionId: string;
 	model: { provider: string; id: string };
 	thinking: string;
@@ -320,13 +322,16 @@ export class PiCompatibilityAdapter {
 			"You are a member of a Pi Agent Team led by the main Pi (the leader).",
 			`Team: ${member.team} | Member: ${member.id} | Role: ${member.role}`,
 			"",
+			"Member head prompt:",
+			member.headPrompt,
+			"",
 			"Fixed instructions:",
 			member.instructions,
 			"",
 			"Follow only the current runtime dispatch and its local TaskPacket or review/expert targets.",
 			"Do not consult legacy team files, other members, the parent roster, global plan, or parent conversation history.",
 			"Do not create or coordinate agents and do not use agent_team; the leader alone dispatches work.",
-		].join("\n");
+		].filter((line): line is string => Boolean(line)).join("\n");
 		await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
 		const cleanupPrompt = async () => {
 			await rm(promptDir, { recursive: true, force: true });

@@ -989,8 +989,8 @@ test("set-auto authorizes only plan gates for the current runtime session", asyn
 });
 
 test("legacy inline payloads are absent from schema and rejected while old state remains operable", async () => {
-	assert.equal("task" in AgentTeamParams.properties, false);
-	assert.equal("tasks" in AgentTeamParams.properties, false);
+	assert.equal(AgentTeamParams.anyOf.some((variant: { properties?: Record<string, unknown> }) => "task" in (variant.properties ?? {})), false);
+	assert.equal(AgentTeamParams.anyOf.some((variant: { properties?: Record<string, unknown> }) => "tasks" in (variant.properties ?? {})), false);
 	const legacyState = stateWithMembers({ reviewer: existingMember("legacy-session") });
 	assert.throws(
 		() => validateToolRequest(
@@ -1372,6 +1372,34 @@ test("planned TaskPacket is minimal and Coder cannot self-verify", async () => {
 	assert.equal(result.details.results?.[0].delta?.changed.status, "SUBMITTED");
 	assert.equal(runtime.getState().teams.default.executionTasks["task-a"].status, "SUBMITTED");
 	await assert.rejects(runtime.execute({ action: "run", taskId: "task-a" }, ctx), /cannot start from SUBMITTED/u);
+});
+
+test("member and task prompt sections are assembled without replacing the identity boundary", async () => {
+	const plan = structuredClone(PLAN);
+	plan.members[0].headPrompt = "成员级头部：保持谨慎。";
+	plan.members[0].tailPrompt = "成员级尾部：回报前复核。";
+	plan.tasks[0].headPrompt = "任务级头部：只处理兼容性。";
+	plan.tasks[0].tailPrompt = "任务级尾部：检查边界条件。";
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx, plan);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	const member = compatibility.membersSeen[0];
+	assert.equal(member.headPrompt, "成员级头部：保持谨慎。");
+	assert.equal(member.tailPrompt, "成员级尾部：回报前复核。");
+	const prompt = compatibility.clients[0].promptCalls[0];
+	const positions = [
+		prompt.indexOf("任务级头部：只处理兼容性。"),
+		prompt.indexOf('"taskPacket"'),
+		prompt.indexOf("成员级尾部：回报前复核。"),
+		prompt.indexOf("任务级尾部：检查边界条件。"),
+		prompt.indexOf("Final non-empty line:"),
+	];
+	assert.ok(positions.every((position) => position >= 0));
+	assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+	assert.match(prompt, /Final non-empty line:.*taskId exactly task-a/u);
 });
 
 test("only a final review receives global acceptance", async () => {

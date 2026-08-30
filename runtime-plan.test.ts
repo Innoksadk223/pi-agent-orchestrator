@@ -224,8 +224,20 @@ test("validateOnly is only valid with action plan", () => {
 	);
 });
 
+test("public action schemas expose only their own required dispatch fields", () => {
+	const variants = AgentTeamParams.anyOf as Array<{ properties: Record<string, unknown>; required?: string[] }>;
+	const variant = (action: string) => variants.find((candidate) => (candidate.properties.action as { const?: string }).const === action)!;
+	assert.deepEqual(variant("run").required, ["action", "taskId"]);
+	assert.deepEqual(variant("review").required, ["action", "reviewRoundId", "taskIds"]);
+	assert.deepEqual(variant("expert").required, ["action", "expertRoundId", "expertId", "taskIds", "objective"]);
+	assert.equal("reviewRoundId" in variant("run").properties, false);
+	assert.equal("objective" in variant("review").properties, false);
+	assert.equal("taskIds" in variant("expert").properties, true);
+});
+
 test("public requestId schema accepts runtime-generated source tuple ids", () => {
-	const requestIdSchema = AgentTeamParams.properties.requestId as { pattern: string; maxLength: number };
+	const requestIdSchema = (AgentTeamParams.anyOf as Array<{ properties?: Record<string, unknown> }>).find((variant) => "requestId" in (variant.properties ?? {}))?.properties?.requestId as { pattern: string; maxLength: number };
+	assert.ok(requestIdSchema);
 	assert.equal(requestIdSchema.maxLength, 200);
 	assert.match("execution:task-a:1", new RegExp(requestIdSchema.pattern, "u"));
 	assert.match("review:review-1:99", new RegExp(requestIdSchema.pattern, "u"));
