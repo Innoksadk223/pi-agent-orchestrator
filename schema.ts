@@ -1,5 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Type, type Static, type TProperties } from "typebox";
+import { Type, type Static } from "typebox";
 import { MAX_PARALLEL_TASKS, THINKING_LEVELS, type ToolParams } from "./runtime.ts";
 
 const Id = Type.String({
@@ -39,19 +39,6 @@ const Member = Type.Object(
 	},
 	{ additionalProperties: false },
 );
-const MemberId = Type.Object({ id: Id }, { additionalProperties: false });
-const SetModelMember = Type.Object(
-	{
-		id: Id,
-		model: Type.String({
-			minLength: 3,
-			maxLength: 200,
-			description: "Exact canonical provider/model; never silently replaced.",
-		}),
-		thinking: Member.properties.thinking,
-	},
-	{ additionalProperties: false },
-);
 const PlanMember = Type.Object(
 	{
 		id: Id,
@@ -73,7 +60,7 @@ const PlannedTask = Type.Object(
 		objective: Prompt,
 		constraints: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 30 })),
 		dependsOn: Type.Optional(Type.Array(Id, { maxItems: 30, uniqueItems: true })),
-		ownedPaths: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { minItems: 1, maxItems: 100, uniqueItems: true }),
+		ownedPaths: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 100, uniqueItems: true }),
 		acceptance: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { minItems: 1, maxItems: 30 }),
 		relevantPaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 100, uniqueItems: true })),
 		headPrompt: Type.Optional(Prompt),
@@ -92,54 +79,39 @@ const Plan = Type.Object(
 	{ additionalProperties: false },
 );
 
-function Action<T extends TProperties>(action: string, properties: T) {
-	return Type.Object(
-		{ action: Type.Literal(action), team: Type.Optional(Id), ...properties },
-		{ additionalProperties: false },
-	);
-}
-
-// Keep each action's public shape small. Runtime validation remains the second
-// line of defense for state-dependent checks such as task status and ownership.
-export const AgentTeamParams = Type.Union([
-	Action("plan", {
-		plan: Plan,
+// Keep one transport-compatible object at the harness boundary. Action-specific
+// requiredness and cross-field permissions stay in validateToolRequest(), where
+// the runtime can return precise errors without relying on JSON Schema unions.
+export const AgentTeamParams = Type.Object(
+	{
+		action: StringEnum([
+			"plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "cancel",
+			"set-model", "set-auto", "steer", "pause", "resume", "answer-request", "resolve-request",
+		] as const),
+		team: Type.Optional(Id),
+		member: Type.Optional(Member),
+		plan: Type.Optional(Plan),
 		expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 		validateOnly: Type.Optional(Type.Boolean()),
-	}),
-	Action("run", { taskId: Id, background: Type.Optional(Type.Boolean()) }),
-	Action("resume", { taskId: Id, background: Type.Optional(Type.Boolean()) }),
-	Action("parallel", {
-		taskIds: Type.Array(Id, { minItems: 2, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true }),
+		taskId: Type.Optional(Id),
+		taskIds: Type.Optional(Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true })),
+		reviewRoundId: Type.Optional(Id),
+		expertRoundId: Type.Optional(Id),
+		expertId: Type.Optional(Id),
+		objective: Type.Optional(Prompt),
+		full: Type.Optional(Type.Boolean()),
 		background: Type.Optional(Type.Boolean()),
-	}),
-	Action("review", {
-		reviewRoundId: Id,
-		taskIds: Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true }),
-		background: Type.Optional(Type.Boolean()),
-	}),
-	Action("expert", {
-		expertRoundId: Id,
-		expertId: Id,
-		taskIds: Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true }),
-		objective: Prompt,
-		background: Type.Optional(Type.Boolean()),
-	}),
-	Action("wait", { member: MemberId, timeout: Type.Optional(Type.Integer({ minimum: 1 })) }),
-	Action("status", { member: Type.Optional(MemberId), full: Type.Optional(Type.Boolean()) }),
-	Action("stop", { member: Type.Optional(MemberId) }),
-	Action("kill", { member: Type.Optional(MemberId) }),
-	Action("cancel", { taskIds: Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true }) }),
-	Action("set-model", { member: SetModelMember }),
-	Action("set-auto", { auto: Type.Boolean() }),
-	Action("steer", { member: MemberId, message: Type.String({ minLength: 1, maxLength: 2000 }) }),
-	Action("pause", { taskId: Id }),
-	Action("answer-request", { requestId: RequestId, answer: Type.String({ minLength: 1, maxLength: 2000 }) }),
-	Action("resolve-request", { requestId: RequestId }),
-]);
+		timeout: Type.Optional(Type.Integer({ minimum: 1 })),
+		auto: Type.Optional(Type.Boolean()),
+		message: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+		requestId: Type.Optional(RequestId),
+		answer: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+	},
+	{ additionalProperties: false },
+);
 
-// The public schema is intentionally narrower than the runtime's internal
-// action-dispatch interface; runtime validation also checks state and ownership.
+// The public schema is intentionally transport-compatible; runtime validation
+// remains the second line of defense for action-specific fields and state.
 type SchemaParams = Static<typeof AgentTeamParams>;
 const _typeCheck: SchemaParams extends ToolParams ? true : never = true;
 void _typeCheck;

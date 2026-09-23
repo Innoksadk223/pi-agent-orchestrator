@@ -24,6 +24,7 @@ description: Use when the main Pi needs persistent multi-agent execution for a c
 
 - 完整固定 roster；每个成员有 `kind`、`id`、`role`、`instructions`。新成员省略模型时继承主 Pi；只在用户明确指定时填写真实可用目录中的精确 canonical `provider/model`，显式无效值会报错且绝不回退。amendment 中既有成员省略模型会保留其当前持久化选择；
 - **每个成员的 `instructions` 必须是一份专门的专业角色书**，禁止一句话敷衍。写清五要素：职责与专长、边界（不碰什么/不决策什么）、行事风格、输出要求、与其他成员的协作关系；用用户的语言书写；
+- **先复用、后新增**：名册只增不减。注册或修订前先判断已有成员的 `kind`、角色书与权限边界能否覆盖新工作——能覆盖就把新的 ExecutionTask 派给既有成员，不要新建。只有现有成员的专业方向、边界或独立性确实不匹配（例如需要另一个技术领域，或需要一份全新的独立评审来源）才新增成员：每次新增都多一个 session、一份角色书和一次 USER_GATE，且永远无法删减。
 - `instructions` 经 `--append-system-prompt` 原样注入成员进程，是该成员唯一的人格来源；可选 `headPrompt` 用于长期人设/方法补充，成员可选 `tailPrompt` 用于长期收尾检查；修订已建会话成员的 instructions 会被旧历史压制，需换替补才干净生效（见 Settled JSON Contract 节末）；
 - ExecutionTask 可选 `headPrompt`/`tailPrompt` 作为当前任务的一次性追加提示词。组装顺序为成员默认提示词、任务 headPrompt、当前 TaskPacket、成员 tailPrompt、任务 tailPrompt、Runtime 强制报告协议；用户提示词不能覆盖权限边界或最终 JSON envelope；
 - 唯一 `reviewerId`；

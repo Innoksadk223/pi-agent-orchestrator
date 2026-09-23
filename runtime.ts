@@ -508,14 +508,17 @@ function hasConfig(input: MemberInput): boolean {
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const EVIDENCE_GUIDELINE =
-	'envelope 必须是回复的最后一个非空行，裸的单行 JSON 对象；禁止代码围栏/```、禁止 Markdown 包裹、禁止正文后留空行或注释。evidence 元素只写纯中文的路径/行号描述，必须用 path:line 冒号格式（如 src/a.ts:42，用正斜杠 /），禁止散文式「第 N 行」写法、禁止反斜杠、禁止贴代码片段、禁止照抄示例内容。';
+	'End with exactly one report envelope as the final non-empty line. Bare JSON is preferred; one fence containing only that JSON is accepted. Evidence items use path:line with /, not prose, backslashes, or code.';
+function reportContract(type: string, idField: string, id: string, fields: string): string {
+	return `${EVIDENCE_GUIDELINE} type=${type}, ${idField} exactly ${id}; ${fields}.`;
+}
 function executionOutputContract(taskId: string): string {
-	return `Final non-empty line: one bare single-line JSON object with agent_team_report.type=execution, taskId exactly ${taskId}, status exactly SUBMITTED or BLOCKED, summary string, evidence array, and requests array.`;
+	return reportContract("execution", "taskId", taskId, "status SUBMITTED or BLOCKED, summary, evidence, and requests");
 }
 
 export function normalizeOwnedPath(value: string): string {
-	const trimmed = value.trim();
-	if (!trimmed || isAbsolute(trimmed) || trimmed.includes("\\") || trimmed.split("/").includes("..") || /[*?\[\]{}]/u.test(trimmed)) {
+	const trimmed = value.trim().replace(/[ \t]*\r?\n[ \t]*/gu, " ");
+	if (!trimmed || isAbsolute(trimmed) || trimmed.includes("\\") || trimmed.split("/").includes("..") || /[*?{}]/u.test(trimmed)) {
 		throw new TeamInputError(`Owned path must be a cwd-relative POSIX path: ${value}`);
 	}
 	const normalized = posix.normalize(trimmed.replace(/^\.\//u, "")).replace(/\/$/u, "");
@@ -588,7 +591,10 @@ function preparePlan(
 		if (member.kind !== "coder" && (!member.tools?.length || member.tools.some((tool) => tool === "edit" || tool === "write" || tool === "agent_team"))) {
 			throw new TeamInputError(`Planned ${member.kind} member ${member.id} requires an explicit tool list without edit/write/agent_team.`);
 		}
-		configs[member.id] = normalizeNewMember(member, ctx, currentMembers[member.id]?.model);
+		const normalizedMember = member.kind !== "coder" && member.tools === undefined
+			? { ...member, tools: ["read"] }
+			: member;
+		configs[member.id] = normalizeNewMember(normalizedMember, ctx, currentMembers[member.id]?.model);
 		memberKinds[member.id] = member.kind;
 	}
 	if (!configs[input.reviewerId] || memberKinds[input.reviewerId] !== "reviewer") {
@@ -776,6 +782,31 @@ function amendmentSections(current: TeamRecord, plan: PreparedPlan): string[] {
 	return lines;
 }
 
+// Reuse-first check, dry runs only: an already-approved member of the same kind
+// that owns no task in the draft plan is idle by construction, so a newly added
+// member of that kind needs a stated reason. Advisory text only - it never blocks
+// submission, persists nothing, and never reaches the human gate.
+export function reuseHints(current: TeamRecord, plan: PreparedPlan): string[] {
+	const assigned = new Set(Object.values(plan.tasks).map((task) => task.memberId));
+	return Object.keys(plan.configs)
+		.filter((id) => !current.members[id])
+		.sort()
+		.flatMap((id) => {
+			const idle = Object.keys(current.members)
+				.filter((existing) => plan.memberKinds[existing] === plan.memberKinds[id] && !assigned.has(existing))
+				.sort();
+			if (idle.length === 0) return [];
+			return [`- new ${plan.memberKinds[id]} "${id}" while ${idle.join(", ")} of the same kind have no task in this plan. Reuse one unless its charter genuinely cannot cover the work.`];
+		});
+}
+
+function markdownFields(title: string, fields: Array<[string, string | string[] | undefined]>): string {
+	return [`## ${title}`, ...fields.flatMap(([label, value]) => {
+		if (value === undefined) return [];
+		if (Array.isArray(value)) return [`**${label}**`, ...value.map((item) => `- ${item}`)];
+		return [`**${label}**`, value];
+	})].join("\n");
+}
 export function planConfirmation(teamId: string, plan: PreparedPlan, revision: number, current?: TeamRecord): string {
 	// Canonical Markdown so every surface renders it well: IDE/RPC dialogs render
 	// MD natively, and the TUI confirm component parses the same structure into
@@ -924,7 +955,9 @@ export function validateToolRequest(params: ToolParams, state: TeamState): void 
 	if (params.action === "status") {
 		if (params.member) assertMemberIdOnly(params.member);
 		forbid(...planFields, "background", "timeout", "auto");
+		return;
 	}
+	throw new TeamInputError(`Unknown agent_team action: ${String(params.action)}.`);
 }
 
 export function migrateState(value: unknown, now = new Date().toISOString()): TeamState {
@@ -1075,6 +1108,17 @@ function assistantMessageModel(message: unknown): string | undefined {
 	return record.role === "assistant" && typeof record.provider === "string" && typeof record.model === "string"
 		? `${record.provider}/${record.model}`
 		: undefined;
+}
+
+function assistantMessageText(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const content = (message as { role?: string; content?: unknown }).content;
+	if ((message as { role?: string }).role !== "assistant" || !Array.isArray(content)) return undefined;
+	const text = content
+		.filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("");
+	return text || undefined;
 }
 
 function assistantFailure(event: any): string | undefined {
@@ -1304,7 +1348,29 @@ export interface ExpertEnvelope {
 }
 export type ReportEnvelope = ExecutionEnvelope | ReviewEnvelope | ExpertEnvelope;
 
-export class ReportEnvelopeError extends Error {}
+export class ReportEnvelopeError extends Error {
+	readonly code: string;
+
+	constructor(message: string, code = "REPORT_FIELDS_INVALID") {
+		super(message);
+		this.code = code;
+	}
+}
+
+function reportEnvelopeJson(output: string): string {
+	const trimmed = output.trim();
+	if (!trimmed) throw new ReportEnvelopeError("No new assistant text was produced for this dispatch.", "REPORT_NO_ASSISTANT_TEXT");
+	const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/iu.exec(trimmed);
+	if (fenced) return fenced[1].trim();
+	const finalLine = trimmed.split(/\r?\n/u).at(-1)?.trim();
+	if (!finalLine?.startsWith("{") || !finalLine.endsWith("}")) {
+		throw new ReportEnvelopeError("Report envelope is missing; expected a bare final JSON object or one JSON code fence.", "REPORT_ENVELOPE_MISSING");
+	}
+	if (trimmed.includes("```")) {
+		throw new ReportEnvelopeError("Report envelope must be the final bare line or the complete fenced response.", "REPORT_ENVELOPE_AMBIGUOUS");
+	}
+	return finalLine;
+}
 
 function reportRecord(value: unknown, label: string): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new ReportEnvelopeError(`${label} must be an object.`);
@@ -1355,16 +1421,12 @@ function parseMemberMessages(value: unknown): ReportMessage[] {
 }
 
 export function parseReportEnvelope(output: string, expectedType: ReportEnvelope["type"]): ReportEnvelope {
-	const lines = output.trimEnd().split(/\r?\n/u);
-	const tail = lines.at(-1)?.trim();
-	if (!tail?.startsWith("{") || !tail.endsWith("}")) {
-		throw new ReportEnvelopeError("Final non-empty line must be the JSON report envelope.");
-	}
+	const candidate = reportEnvelopeJson(output);
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(tail);
+		parsed = JSON.parse(candidate);
 	} catch (error) {
-		throw new ReportEnvelopeError(`Final JSON envelope is invalid: ${error instanceof Error ? error.message : String(error)}`);
+		throw new ReportEnvelopeError(`Report envelope JSON is invalid: ${error instanceof Error ? error.message : String(error)}`, "REPORT_JSON_INVALID");
 	}
 	const root = reportRecord(parsed, "report root");
 	exactKeys(root, ["agent_team_report"], "report root");
@@ -1495,6 +1557,8 @@ export class TeamRuntime {
 	// Results of background (detached) runs, keyed by memberKey, written when the run settles.
 	// wait reads these; stop/shutdown clear them alongside their client lifecycle.
 	private readonly backgroundResults = new Map<string, MemberRunResult>();
+	private readonly parentCompletionQueues = new WeakMap<RuntimeContext, Array<{ content: string; details: unknown }>>();
+	private readonly parentCompletionScheduled = new WeakSet<RuntimeContext>();
 	// Active settle waits for background runs, keyed by memberKey; stop/shutdown cancel
 	// these so a stopped member's background finalization does not hang until idle timeout.
 	private readonly settleWaits = new Map<string, SettledIdleWait>();
@@ -1746,12 +1810,19 @@ export class TeamRuntime {
 				answers.length > 0
 					? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
 					: "",
-				"```json\n" + JSON.stringify({ taskId: task.id, attempt: task.attempt + 1, taskPacket: packetForPrompt }, null, 2) + "\n```",
+				markdownFields(`Execution Task: ${task.id}`, [
+					["Attempt", String(task.attempt + 1)],
+					["Objective", packetForPrompt.objective],
+					["Constraints", packetForPrompt.constraints],
+					["Dependencies", Object.entries(packetForPrompt.dependencySummaries).map(([id, summary]) => `${id}: ${summary}`)],
+					["Owned paths", packetForPrompt.ownedPaths],
+					["Acceptance", packetForPrompt.acceptance],
+					["Relevant paths", packetForPrompt.relevantPaths],
+				]),
 				member.tailPrompt ? `Member tail prompt:\n${member.tailPrompt}` : "",
 				tailPrompt ? `Task-specific tail prompt:\n${tailPrompt}` : "",
 				task.status === "FIX_REQUIRED" ? `Reviewer fix_prompt (execute verbatim, do not broaden scope):\n${task.fixPrompt ?? ""}` : "",
 				outputContract,
-				EVIDENCE_GUIDELINE,
 			].filter(Boolean).join("\n\n");
 			return {
 				member: { id: task.memberId },
@@ -1810,19 +1881,13 @@ export class TeamRuntime {
 			answers.length > 0
 				? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
 				: "",
-			"```json\n" + JSON.stringify({
-				reviewRoundId: roundId,
-				targets: targets.map((task) => ({
-					taskId: task.id,
-					attempt: task.attempt,
-					packet: task.packet,
-					submission: { summary: task.lastSummary, evidence: task.lastEvidence, outputPath: task.outputPath },
-				})),
-				...(finalAcceptance ? { globalAcceptance: finalAcceptance } : {}),
-			}, null, 2) + "\n```",
+			markdownFields(`Review Round: ${roundId}`, [
+				["Targets", targets.map((task) => `${task.id} (attempt ${task.attempt})`)],
+				["Submissions", targets.map((task) => `${task.id}: ${task.lastSummary ?? "<no summary>"}; evidence=${(task.lastEvidence ?? []).join(", ")}; output=${task.outputPath ?? "<inline>"}`)],
+				...(finalAcceptance ? [["Global acceptance", finalAcceptance] as [string, string[]]] : []),
+			]),
 			reviewer.tailPrompt ? `Member tail prompt:\n${reviewer.tailPrompt}` : "",
-			`Final non-empty line: one bare single-line JSON object with agent_team_report.type=review, reviewRoundId exactly ${roundId}, summary string, evidence array, requests array, and exactly one decision for each target task; verdict is VERIFIED or FIX_REQUIRED.`,
-			EVIDENCE_GUIDELINE,
+			reportContract("review", "reviewRoundId", roundId, "summary, evidence, requests, and one decision per target; verdict VERIFIED or FIX_REQUIRED"),
 		].join("\n\n");
 		return {
 			tasks: [
@@ -1889,10 +1954,13 @@ export class TeamRuntime {
 			answers.length > 0
 				? `Leader answers to your earlier requests:\n${answers.map((request) => `- [${request.kind}] ${request.answer}`).join("\n")}`
 				: "",
-			"```json\n" + JSON.stringify({ expertRoundId: roundId, objective, targets: targets.map((task) => ({ taskId: task.id, status: task.status, packet: task.packet, summary: task.lastSummary, evidence: task.lastEvidence })) }, null, 2) + "\n```",
+			markdownFields(`Expert Round: ${roundId}`, [
+				["Kind", kind],
+				["Objective", objective],
+				["Targets", targets.map((task) => `${task.id} (${task.status}): ${task.lastSummary ?? "<no summary>"}; evidence=${(task.lastEvidence ?? []).join(", ")}`)],
+			]),
 			expert.tailPrompt ? `Member tail prompt:\n${expert.tailPrompt}` : "",
-			`Final non-empty line: one bare single-line JSON object with agent_team_report.type=expert, expertRoundId exactly ${roundId}, summary string, evidence array, and requests array.`,
-			EVIDENCE_GUIDELINE,
+			reportContract("expert", "expertRoundId", roundId, "summary, evidence, and requests"),
 		].join("\n\n");
 		return {
 			tasks: [
@@ -2087,7 +2155,7 @@ export class TeamRuntime {
 			if (target.type === "execution") {
 				const task = team.executionTasks[target.id];
 				const envelope = report as ExecutionEnvelope;
-				if (envelope.taskId !== task.id) throw new ReportEnvelopeError(`Execution report taskId ${envelope.taskId} does not match ${task.id}.`);
+				if (envelope.taskId !== task.id) throw new ReportEnvelopeError(`Execution report taskId ${envelope.taskId} does not match ${task.id}.`, "REPORT_TARGET_MISMATCH");
 				if (task.status !== "RUNNING") throw new ReportEnvelopeError(`Execution task ${task.id} is ${task.status}, expected RUNNING.`);
 				task.status = envelope.status;
 				task.lastSummary = envelope.summary;
@@ -2106,7 +2174,7 @@ export class TeamRuntime {
 			if (target.type === "review") {
 				const round = team.reviewRounds[target.id];
 				const envelope = report as ReviewEnvelope;
-				if (envelope.reviewRoundId !== round.id) throw new ReportEnvelopeError(`Review report id ${envelope.reviewRoundId} does not match ${round.id}.`);
+				if (envelope.reviewRoundId !== round.id) throw new ReportEnvelopeError(`Review report id ${envelope.reviewRoundId} does not match ${round.id}.`, "REPORT_TARGET_MISMATCH");
 				const decisionIds = envelope.decisions.map((decision) => decision.taskId);
 				if (new Set(decisionIds).size !== decisionIds.length || decisionIds.length !== round.targetTaskIds.length || round.targetTaskIds.some((id) => !decisionIds.includes(id))) {
 					throw new ReportEnvelopeError("Review decisions must cover each target task exactly once.");
@@ -2137,7 +2205,7 @@ export class TeamRuntime {
 			}
 			const round = team.expertRounds[target.id];
 			const envelope = report as ExpertEnvelope;
-			if (envelope.expertRoundId !== round.id) throw new ReportEnvelopeError(`Expert report id ${envelope.expertRoundId} does not match ${round.id}.`);
+			if (envelope.expertRoundId !== round.id) throw new ReportEnvelopeError(`Expert report id ${envelope.expertRoundId} does not match ${round.id}.`, "REPORT_TARGET_MISMATCH");
 			round.status = "COMPLETED";
 			round.summary = envelope.summary;
 			round.evidence = envelope.evidence;
@@ -2148,7 +2216,9 @@ export class TeamRuntime {
 			this.enqueueMemberMessages(team, "expert", round.id, envelope.messages ?? []);
 			return this.deltaFor(team, { type: "expert", id: round.id, status: round.status }, envelope.summary, requests, outputPath);
 		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
+			const reason = error instanceof ReportEnvelopeError
+				? `${error.code}: ${error.message}`
+				: `REPORT_FIELDS_INVALID: ${error instanceof Error ? error.message : String(error)}`;
 			if (target.type === "execution") {
 				const task = team.executionTasks[target.id];
 				task.status = "REPORT_INVALID";
@@ -2248,10 +2318,14 @@ export class TeamRuntime {
 		// persistence, revision consumption, or workspace writes so the Leader can
 		// iterate on a draft plan cheaply before the real submission.
 		if (validateOnly) {
+			const hints = current ? reuseHints(current, prepared) : [];
 			return {
 				content: [{
 					type: "text",
-					text: `Plan validation passed for team ${teamId}: revision ${revision} would ${current ? "amend to" : "register"} ${Object.keys(prepared.configs).length} members and ${Object.keys(prepared.tasks).length} tasks. Nothing was persisted and no gate was shown; submit with action plan when ready.`,
+					text: [
+						`Plan validation passed for team ${teamId}: revision ${revision} would ${current ? "amend to" : "register"} ${Object.keys(prepared.configs).length} members and ${Object.keys(prepared.tasks).length} tasks. Nothing was persisted and no gate was shown; submit with action plan when ready.`,
+						...(hints.length > 0 ? ["", "Reuse check (advisory, dry runs only):", ...hints] : []),
+					].join("\n"),
 				}],
 				details: { action: "plan" },
 			};
@@ -2595,7 +2669,9 @@ export class TeamRuntime {
 		if (member.status === "STOPPED") member.status = "STARTING";
 		let client: RpcClientLike | undefined;
 		let accepted = false;
+		let preflightAccepted: boolean | undefined;
 		let responseError: string | undefined;
+		let finalAssistantText: string | undefined;
 		let firstAssistantChecked = false;
 		let unsubscribe: (() => void) | undefined;
 		let abortListener: (() => void) | undefined;
@@ -2714,6 +2790,7 @@ export class TeamRuntime {
 			unsubscribe = client.onEvent((event) => {
 				recordProbeEvent(event);
 				if (event?.type === "message_end" && event.message?.role === "assistant") {
+					finalAssistantText = assistantMessageText(event.message);
 					if (!firstAssistantChecked) {
 						firstAssistantChecked = true;
 						const expected = `${member.model.provider}/${member.model.id}`;
@@ -2723,7 +2800,9 @@ export class TeamRuntime {
 							responseError = `First assistant response model mismatch: expected ${expected}, got ${actual ?? "<missing>"}.`;
 						}
 					}
-					responseError ??= assistantFailure(event);
+					const failure = assistantFailure(event);
+					if (failure) responseError = failure;
+					else if (!responseError?.startsWith("First assistant response model mismatch:", 0)) responseError = undefined;
 				}
 				for (const dashboardEvent of dashboardEventsFromRpc(event)) view?.write(dashboardEvent);
 				const progress =
@@ -2754,10 +2833,17 @@ export class TeamRuntime {
 			if (interrupted) {
 				throw new MemberResponseError(STOPPED_BEFORE_PROMPT);
 			}
-			await client.prompt(item.task);
-			accepted = true;
-			// 送达/解决标记只在 prompt 被接受后发生;失败路径保留注入内容,下次显式
-			// dispatch 再次注入(绝不自动重放,也绝不标记未接受的送达)。
+			await client.prompt(item.task, {
+				preflightResult: (success) => {
+					if (preflightAccepted !== undefined) return;
+					preflightAccepted = success;
+					accepted = success;
+				},
+			});
+			if (preflightAccepted !== true) throw new MemberResponseError(preflightAccepted === false ? "Prompt preflight rejected; prompt was not accepted." : "Prompt completed without a preflight result; acceptance is unknown and the prompt was not replayed.");
+			await onPromptSettled?.(true);
+			// prompt() resolves only after the accepted run completes; preflightResult
+			// above is the sole source of truth for whether replay is forbidden.
 			const teamNow = this.state.teams[teamId];
 			if (teamNow && (item.messageIds?.length || item.requestIds?.length)) {
 				this.resolveInjected(teamNow, item.messageIds, item.requestIds);
@@ -2767,7 +2853,7 @@ export class TeamRuntime {
 					// read-only state: delivery markers stay in-memory
 				}
 			}
-			await onPromptSettled?.(true);
+
 			// A kill racing prompt acceptance marks the member STOPPED; never let this
 			// run proceed (no settle wait, no replay) once the kill is visible.
 			if ((member.status as MemberStatus) === "STOPPED") {
@@ -2790,6 +2876,7 @@ export class TeamRuntime {
 					settleWait!,
 					() => interrupted,
 					() => responseError ?? (firstAssistantChecked ? undefined : "First assistant response model metadata was not observed."),
+					() => finalAssistantText,
 					item.target,
 					() => probe,
 					() => {
@@ -2916,6 +3003,7 @@ export class TeamRuntime {
 		settleWait: SettledIdleWait,
 		interrupted: () => boolean,
 		getResponseError: () => string | undefined,
+		getFinalAssistantText: () => string | undefined,
 		target: RunTarget | undefined,
 		probe: () => MemberHealthProbe,
 		onComplete: () => void,
@@ -2941,12 +3029,12 @@ export class TeamRuntime {
 			// message_end may carry stopReason "aborted", which must never be treated
 			// as an assistant error.
 			if (!interrupted() && !signal?.aborted && getResponseError()) throw new MemberResponseError(getResponseError()!);
-			const [after, fullOutput] = await Promise.all([client.getSessionStats(), client.getLastAssistantText()]);
-			// S2-7: only adopt the final text when this round produced a new assistant
-			// message whose text differs from the pre-prompt baseline. A quiet round
-			// (no assistant message, or one without text) must not misreport the
-			// previous round's output as this round's result.
-			const hasNewText = after.assistantMessages > before.assistantMessages && fullOutput !== baselineText;
+			const [after, lastAssistantText] = await Promise.all([client.getSessionStats(), client.getLastAssistantText()]);
+			// message_end is authoritative for this round, including repeated text that
+			// happens to equal the previous round. RPC text is only a compatibility fallback.
+			const eventText = getFinalAssistantText();
+			const hasNewText = after.assistantMessages > before.assistantMessages && (eventText !== undefined || lastAssistantText !== baselineText);
+			const fullOutput = eventText ?? lastAssistantText;
 			let output = hasNewText ? (fullOutput ?? "") : "";
 			let truncated = false;
 			const usage = usageDelta(before, after);
@@ -2954,21 +3042,33 @@ export class TeamRuntime {
 			member.idleSinceMs = Date.now();
 			// 健康快照与状态变更同时一次性持久化(不逐流式 delta 追加快照)。
 			this.applyHealthSnapshot(member, probe(), usage, after.contextUsage);
-			// 仅超长时落盘(用户确认):输出超过限制被截断时,完整版写入 members/<id>/output.md
+			// Oversized output is always preserved; shorter planned output is written only
+			// when its report is invalid and the persisted state needs a recovery source.
 			let outputPath: string | undefined;
 			if (Buffer.byteLength(output, "utf8") > MAX_MEMBER_OUTPUT_BYTES) {
 				outputPath =
 					(await this.writeMemberOutput(member, output, workspace)) ?? join(workspace, "members", member.id, "output.md");
+			}
+			if (Buffer.byteLength(output, "utf8") > MAX_MEMBER_OUTPUT_BYTES) {
 				const pathLine = `[Full output: ${outputPath}]`;
 				const cut = truncateMemberOutput(output, Buffer.byteLength(pathLine, "utf8") + 1);
 				output = `${cut.output}\n${pathLine}`;
 				truncated = true;
 			}
-			const delta = target
+			let delta = target
 				? member.status === "INTERRUPTED"
 					? this.interruptPlannedTarget(target, false, "Member attempt was interrupted; prompt not replayed.")
 					: this.applyPlannedReport(target, hasNewText ? (fullOutput ?? "") : "", outputPath)
 				: undefined;
+			if (target && delta?.changed.status === "REPORT_INVALID" && output && !outputPath) {
+				outputPath =
+					(await this.writeMemberOutput(member, output, workspace)) ?? join(workspace, "members", member.id, "output.md");
+				delta.outputPath = outputPath;
+				const team = this.state.teams[target.team];
+				if (target.type === "execution") team.executionTasks[target.id].outputPath = outputPath;
+				else if (target.type === "review") team.reviewRounds[target.id].outputPath = outputPath;
+				else team.expertRounds[target.id].outputPath = outputPath;
+			}
 			this.persist(ctx);
 			if (target) await this.writePlanWorkspace(member.team, ctx).catch(() => undefined);
 			// Calibrate the Dashboard mirror with the final assistant text (replace
@@ -3074,36 +3174,52 @@ export class TeamRuntime {
 	 * deliver must never break member finalization - the parent session may be
 	 * tearing down.
 	 */
+	private queueParentCompletion(ctx: RuntimeContext, content: string, details: unknown): void {
+		const queue = this.parentCompletionQueues.get(ctx) ?? [];
+		queue.push({ content, details });
+		this.parentCompletionQueues.set(ctx, queue);
+		if (this.parentCompletionScheduled.has(ctx)) return;
+		this.parentCompletionScheduled.add(ctx);
+		setTimeout(() => {
+			this.parentCompletionScheduled.delete(ctx);
+			const pending = this.parentCompletionQueues.get(ctx) ?? [];
+			this.parentCompletionQueues.delete(ctx);
+			if (!ctx.sendParentMessage || pending.length === 0) return;
+			try {
+				ctx.sendParentMessage(
+					{
+						customType: AGENT_TEAM_COMPLETION_TYPE,
+						content: pending.map((item) => item.content).join("\n\n"),
+						display: true,
+						details: pending.length === 1 ? pending[0].details : { completions: pending.map((item) => item.details) },
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			} catch {
+				// Parent teardown must never affect member finalization.
+			}
+		}, 10);
+	}
+
 	private reportParentCompletion(ctx: RuntimeContext, result: MemberRunResult): void {
 		if (!ctx.sendParentMessage || result.status === "STOPPED") return;
-		try {
-			const delta = result.delta;
-			ctx.sendParentMessage(
-				{
-					customType: AGENT_TEAM_COMPLETION_TYPE,
-					content: delta
-						? [
-							`Agent Team delta ${delta.team}: ${delta.changed.type}/${delta.changed.id} -> ${delta.changed.status}`,
-							`Team counts: ${Object.entries(delta.counts).map(([status, count]) => `${status}=${count}`).join(", ")}`,
-							delta.summary ? `Summary: ${delta.summary}` : undefined,
-							delta.requests.length ? `Requests: ${delta.requests.map((request) => `${request.kind}: ${request.text}`).join(" | ")}` : undefined,
-							delta.outputPath ? `Output file: ${delta.outputPath}` : undefined,
-						].filter(Boolean).join("\n")
-						: [
-							`Agent Team member ${result.team}/${result.member} [${result.status}] done.`,
-							result.outputPath ? `Output file: ${result.outputPath}` : undefined,
-							result.output ? `Summary: ${result.output.slice(0, 1000)}${result.output.length > 1000 ? "...[truncated; use wait for full result]" : ""}` : "(no assistant text)",
-						].filter(Boolean).join("\n"),
-					display: true,
-					details: delta
-						? { delta }
-						: { member: { team: result.team, id: result.member, status: result.status, sessionId: result.sessionId, outputPath: result.outputPath } },
-				},
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
-		} catch {
-			// never break member finalization
-		}
+		const delta = result.delta;
+		const content = delta
+			? [
+				`Agent Team delta ${delta.team}: ${delta.changed.type}/${delta.changed.id} -> ${delta.changed.status}`,
+				`Team counts: ${Object.entries(delta.counts).map(([status, count]) => `${status}=${count}`).join(", ")}`,
+				delta.summary ? `Summary: ${delta.summary}` : undefined,
+				delta.requests.length ? `Requests: ${delta.requests.map((request) => `${request.kind}: ${request.text}`).join(" | ")}` : undefined,
+				delta.outputPath ? `Output file: ${delta.outputPath}` : undefined,
+			].filter(Boolean).join("\n")
+			: [
+				`Agent Team member ${result.team}/${result.member} [${result.status}] done.`,
+				result.outputPath ? `Output file: ${result.outputPath}` : undefined,
+				result.output ? `Summary: ${result.output.slice(0, 1000)}${result.output.length > 1000 ? "...[truncated; use wait for full result]" : ""}` : "(no assistant text)",
+			].filter(Boolean).join("\n");
+		this.queueParentCompletion(ctx, content, delta
+			? { delta }
+			: { member: { team: result.team, id: result.member, status: result.status, sessionId: result.sessionId, outputPath: result.outputPath } });
 	}
 
 	/**
@@ -3163,14 +3279,11 @@ export class TeamRuntime {
 				trusted: ctx.trusted,
 			});
 			await handle.client.start();
-			// 成员启动时启用 Pi 原生 auto-compaction；orchestrator 不设自定义阈值，
-			// 也不在 settled 后主动调用 compact。启用失败只记录事实，不自动重放。
+			// 成员必须启用 Pi 原生 auto-compaction；失败时不让未满足契约的 child 继续运行。
 			try {
 				await handle.client.setAutoCompaction(true);
 			} catch (error) {
-				member.contextNote = `Auto-compaction could not be enabled: ${
-					error instanceof Error ? error.message : String(error)
-				}`;
+				throw new Error(`Auto-compaction could not be enabled: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			const childState = await handle.client.getState();
 			if (childState.sessionId !== member.sessionId) {

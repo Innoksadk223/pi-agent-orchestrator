@@ -54,5 +54,6 @@
 - 未排依赖的任务之间不得存在相同或父子包含关系的 owned-path 冲突。
 - Roster、TaskPackets、ownership 与 acceptance 必须足够完整，后续轮次只需 ID 和增量即可推进。
 - 可选的 debugger/product/optimizer 成员要么现在预先批准，要么日后通过 amendment 追加。
+- 新增成员前先逐条回答：「已有成员的 kind、角色书与边界为什么盖不住这个任务？」答不上就复用既有成员——名册只增不减，每次新增都多一个 session、一份角色书和一次 USER_GATE。
 - 不要放入完整全局正文、机密信息、成员聊天指令或历史输出。
 - 每个成员的 `instructions` 都是一份专门的专业角色书（职责、边界、风格、输出要求），并用简体中文书写——绝不能是一句话敷衍。

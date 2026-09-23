@@ -44,7 +44,7 @@ agent_team({ action: "plan", team: "default", expectedRevision: 1, plan: nextPla
 
 提交前可先 `validateOnly: true` 预检同一份草稿：跑全部语义校验（revision、DAG、owned paths、amendment 约束），但不触发 USER_GATE、不消耗 revision、不落盘。amendment 的确认门只显示增量 diff（新增/变更成员与任务、acceptance 增删、reviewer 变更高亮）；初始注册仍显示完整计划。
 
-计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证，并在 auto 关闭时重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
+名册只增不减：新增成员前先判断既有成员的 `kind`、角色书与权限边界能否覆盖新工作——能覆盖就把任务派给既有成员，只有专业方向、边界或独立性确实不匹配时才新增。计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证，并在 auto 关闭时重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
 
 ## 手动推进
 

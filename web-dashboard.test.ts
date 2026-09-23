@@ -117,7 +117,9 @@ class FakeClient implements RpcClientLike {
 	roundOutputs?: string[];
 	// undefined follows the RPC state model; null emits assistant metadata without
 	// provider/model so strict first-response verification can be exercised.
+	preflightReject = false;
 	responseModel?: string | null;
+	autoRetryOnce = false;
 	private idleBlocked = false;
 	private turns = 0;
 	readonly order: string[];
@@ -142,18 +144,38 @@ class FakeClient implements RpcClientLike {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
-	async prompt(message: string): Promise<void> {
+	async prompt(message: string, options?: { preflightResult?: (success: boolean) => void }): Promise<void> {
 		this.promptCalls.push(message);
 		this.order.push(`prompt:${message}`);
+		options?.preflightResult?.(!this.preflightReject);
+		if (this.preflightReject) return;
 		await this.promptGate?.();
 		if (this.promptError) throw this.promptError;
 		this.turns++;
 		const responseModel = this.responseModel === undefined ? this.stateModel : this.responseModel;
 		const slash = responseModel?.indexOf("/") ?? -1;
+		const finalText = this.roundOutputs?.[this.turns - 1] ?? this.output;
+		if (this.autoRetryOnce) {
+			this.emit({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [],
+					...(responseModel && slash > 0
+						? { provider: responseModel.slice(0, slash), model: responseModel.slice(slash + 1) }
+						: {}),
+					stopReason: "error",
+					errorMessage: "transient provider failure",
+				},
+			});
+			this.emit({ type: "auto_retry_start" });
+			this.autoRetryOnce = false;
+		}
 		this.emit({
 			type: "message_end",
 			message: {
 				role: "assistant",
+				content: finalText ? [{ type: "text", text: finalText }] : [],
 				...(responseModel && slash > 0
 					? { provider: responseModel.slice(0, slash), model: responseModel.slice(slash + 1) }
 					: {}),
@@ -201,7 +223,8 @@ class FakeClient implements RpcClientLike {
 		// S2-7 baseline semantics: before the first prompt turn there is no assistant
 		// text, so the runtime can tell "this round produced no new text" apart from
 		// a pre-existing baseline from an earlier round.
-		return this.turns > 0 ? (this.roundOutputs?.[this.turns - 1] ?? this.output) : null;
+		const text = this.roundOutputs?.[this.turns - 1] ?? this.output;
+		return this.turns > 0 ? (text || null) : null;
 	}
 	manualCompactionCalls: string[] = [];
 	setAutoCompactionCalls: boolean[] = [];
@@ -236,6 +259,7 @@ class FakeCompatibility implements CompatibilityPort {
 	contextUsage?: RpcStats["contextUsage"];
 	startErrorsByMember: Record<string, Error> = {};
 	promptErrorsByMember: Record<string, Error> = {};
+	preflightRejectByMember: Record<string, boolean> = {};
 	promptGatesByMember: Record<string, () => Promise<void>> = {};
 	promptError?: Error;
 	stateModel?: string;
@@ -243,6 +267,7 @@ class FakeCompatibility implements CompatibilityPort {
 	ignoreModelUpdates = false;
 	ignoreThinkingUpdates = false;
 	responseModel?: string | null;
+	autoRetryByMember: Record<string, boolean> = {};
 	// Clients without the optional public steer surface (older/embedded adapters).
 	steerMissing = false;
 	membersSeen: any[] = [];
@@ -269,17 +294,19 @@ class FakeCompatibility implements CompatibilityPort {
 		this.toolsSeen.push([...member.tools]);
 		const client = new FakeClient(member.sessionId, this.order);
 		if (this.outputFor) client.output = this.outputFor;
-		if (this.outputsByMember[member.id]) client.output = this.outputsByMember[member.id];
+		if (member.id in this.outputsByMember) client.output = this.outputsByMember[member.id];
 		if (this.roundOutputsByMember[member.id]) client.roundOutputs = [...this.roundOutputsByMember[member.id]];
 		client.contextUsage = this.contextUsage;
 		client.startError = this.startErrorsByMember[member.id];
 		client.promptError = this.promptErrorsByMember[member.id] ?? this.promptError;
+		client.preflightReject = this.preflightRejectByMember[member.id] ?? false;
 		client.promptGate = this.promptGatesByMember[member.id];
 		client.stateModel = this.stateModel ?? `${member.model.provider}/${member.model.id}`;
 		client.stateThinkingLevel = this.stateThinkingLevel ?? member.thinking;
 		client.ignoreModelUpdates = this.ignoreModelUpdates;
 		client.ignoreThinkingUpdates = this.ignoreThinkingUpdates;
 		client.responseModel = this.responseModel;
+		client.autoRetryOnce = Boolean(this.autoRetryByMember[member.id]);
 		if (this.blockIdle) client.blockUntilIdle();
 		if (this.steerMissing) (client as unknown as { steer?: ((message: string) => Promise<void>) | undefined }).steer = undefined;
 		this.clients.push(client);
@@ -989,8 +1016,9 @@ test("set-auto authorizes only plan gates for the current runtime session", asyn
 });
 
 test("legacy inline payloads are absent from schema and rejected while old state remains operable", async () => {
-	assert.equal(AgentTeamParams.anyOf.some((variant: { properties?: Record<string, unknown> }) => "task" in (variant.properties ?? {})), false);
-	assert.equal(AgentTeamParams.anyOf.some((variant: { properties?: Record<string, unknown> }) => "tasks" in (variant.properties ?? {})), false);
+	const properties = (AgentTeamParams as { properties: Record<string, unknown> }).properties;
+	assert.equal("task" in properties, false);
+	assert.equal("tasks" in properties, false);
 	const legacyState = stateWithMembers({ reviewer: existingMember("legacy-session") });
 	assert.throws(
 		() => validateToolRequest(
@@ -1117,6 +1145,7 @@ test("plan registration is one snapshot and amendment requires the exact revisio
 
 test("plan validation rejects unsafe paths, cycles, and unordered ownership conflicts before confirmation", async () => {
 	assert.equal(normalizeOwnedPath("./src/a/"), "src/a");
+	assert.equal(normalizeOwnedPath("wiki/raw/[已看]毕论相关/Attachment and\ndevelopment.md"), "wiki/raw/[已看]毕论相关/Attachment and development.md");
 	assert.equal(pathsConflict("src/a", "src/a/file.ts"), true);
 	assert.equal(pathsConflict("src/a", "src/ab"), false);
 	assert.throws(() => normalizeOwnedPath("../outside"), /cwd-relative|escapes cwd/u);
@@ -1231,6 +1260,24 @@ test("planned batches leave no partial RUNNING state on Dashboard, client, or pr
 		assert.equal(Object.values(team.members).some((member) => member.status === "RUNNING"), false);
 		assert.deepEqual(Object.values(team.executionTasks).map((task) => task.status), ["BLOCKED", "BLOCKED"]);
 		assert.equal(compatibility.clients[0].abortCalls, 1, "accepted peer is interrupted before batch failure returns");
+	});
+
+	await t.test("prompt preflight rejection is distinct from an accepted provider failure", async () => {
+		const rejectedCompatibility = new FakeCompatibility();
+		rejectedCompatibility.preflightRejectByMember["coder-a"] = true;
+		const rejectedRuntime = new TeamRuntime(rejectedCompatibility, () => NOW, undefined, () => new FakeDashboard());
+		const rejectedCtx = context({ mode: "rpc" });
+		await registerPlan(rejectedRuntime, rejectedCtx);
+		await assert.rejects(rejectedRuntime.execute({ action: "run", taskId: "task-a" }, rejectedCtx), /preflight rejected/u);
+		assert.doesNotMatch(rejectedRuntime.getState().teams.default.members["coder-a"].lastError ?? "", /Prompt accepted/u);
+
+		const acceptedCompatibility = new FakeCompatibility();
+		acceptedCompatibility.promptErrorsByMember["coder-a"] = new Error("provider failed after acceptance");
+		const acceptedRuntime = new TeamRuntime(acceptedCompatibility, () => NOW, undefined, () => new FakeDashboard());
+		const acceptedCtx = context({ mode: "rpc" });
+		await registerPlan(acceptedRuntime, acceptedCtx);
+		await assert.rejects(acceptedRuntime.execute({ action: "run", taskId: "task-a" }, acceptedCtx), /provider failed after acceptance/u);
+		assert.match(acceptedRuntime.getState().teams.default.members["coder-a"].lastError ?? "", /Prompt accepted; not replayed/u);
 	});
 
 	await t.test("an 8-task prompt failure stops the first wave and blocks every activated target", async () => {
@@ -1364,8 +1411,8 @@ test("planned TaskPacket is minimal and Coder cannot self-verify", async () => {
 	const result = await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
 	const prompt = compatibility.clients[0].promptCalls[0];
 	assert.match(prompt, /Implement task A objective/u);
-	assert.match(prompt, /"ownedPaths": \[/u);
-	assert.match(prompt, /"dependencySummaries": \{\}/u);
+	assert.match(prompt, /\*\*Owned paths\*\*/u);
+	assert.match(prompt, /\*\*Dependencies\*\*/u);
 	assert.doesNotMatch(prompt, /Global acceptance marker/u);
 	assert.doesNotMatch(prompt, /Implement task B objective/u);
 	assert.doesNotMatch(prompt, /Coder B|Reviewer.*Optimizer/u);
@@ -1392,14 +1439,14 @@ test("member and task prompt sections are assembled without replacing the identi
 	const prompt = compatibility.clients[0].promptCalls[0];
 	const positions = [
 		prompt.indexOf("任务级头部：只处理兼容性。"),
-		prompt.indexOf('"taskPacket"'),
+		prompt.indexOf("## Execution Task: task-a"),
 		prompt.indexOf("成员级尾部：回报前复核。"),
 		prompt.indexOf("任务级尾部：检查边界条件。"),
-		prompt.indexOf("Final non-empty line:"),
+		prompt.indexOf("End with exactly one report envelope"),
 	];
 	assert.ok(positions.every((position) => position >= 0));
 	assert.deepEqual([...positions].sort((a, b) => a - b), positions);
-	assert.match(prompt, /Final non-empty line:.*taskId exactly task-a/u);
+	assert.match(prompt, /type=execution, taskId exactly task-a/u);
 });
 
 test("only a final review receives global acceptance", async () => {
@@ -1414,7 +1461,7 @@ test("only a final review receives global acceptance", async () => {
 	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
 	assert.doesNotMatch(compatibility.clients[0].promptCalls[0], /Global acceptance marker/u);
 	await runtime.execute({ action: "review", reviewRoundId: "final-review", taskIds: ["task-a"], background: false }, ctx);
-	assert.match(compatibility.clients[1].promptCalls[0], /"globalAcceptance"/u);
+	assert.match(compatibility.clients[1].promptCalls[0], /\*\*Global acceptance\*\*/u);
 	assert.match(compatibility.clients[1].promptCalls[0], /Global acceptance marker/u);
 	assert.deepEqual(runtime.getState().teams.default.plan?.acceptance, ["Global acceptance marker."]);
 });
@@ -1452,11 +1499,16 @@ test("background planned review and expert dispatches terminate while their memb
 	await waitFor(() => runtime.getState().teams.default.expertRounds["expert-1"].status === "COMPLETED");
 });
 
-test("strict tail parser accepts three envelopes and rejects missing, extra, and oversized reports", () => {
-	assert.equal(parseReportEnvelope(executionReport("task-a"), "execution").type, "execution");
+test("report parser accepts canonical and fenced envelopes and classifies invalid reports", () => {
+	const execution = executionReport("task-a");
+	assert.equal(parseReportEnvelope(execution, "execution").type, "execution");
+	assert.equal(parseReportEnvelope(`  \n\`\`\`json\n${execution.split("\n").at(-1)}\n\`\`\`\n `, "execution").type, "execution");
 	assert.equal(parseReportEnvelope(reviewReport("review-1", [{ taskId: "task-a", verdict: "VERIFIED" }]), "review").type, "review");
+	assert.throws(() => parseReportEnvelope(`${execution}\ntrailing prose`, "execution"), (error: any) => error.code === "REPORT_ENVELOPE_MISSING");
 	assert.equal(parseReportEnvelope(expertReport("expert-1"), "expert").type, "expert");
-	assert.throws(() => parseReportEnvelope("prose only", "execution"), /Final non-empty line/u);
+	assert.throws(() => parseReportEnvelope("", "execution"), (error: any) => error.code === "REPORT_NO_ASSISTANT_TEXT");
+	assert.throws(() => parseReportEnvelope("prose only", "execution"), (error: any) => error.code === "REPORT_ENVELOPE_MISSING");
+	assert.throws(() => parseReportEnvelope('{"agent_team_report":}', "execution"), (error: any) => error.code === "REPORT_JSON_INVALID");
 	assert.throws(
 		() => parseReportEnvelope(JSON.stringify({ agent_team_report: { type: "execution", taskId: "task-a", status: "VERIFIED", summary: "x", evidence: [], requests: [] } }), "execution"),
 		/SUBMITTED or BLOCKED/u,
@@ -1469,6 +1521,20 @@ test("strict tail parser accepts three envelopes and rejects missing, extra, and
 		() => parseReportEnvelope(JSON.stringify({ agent_team_report: { type: "expert", expertRoundId: "x", summary: "x".repeat(2001), evidence: [], requests: [] } }), "expert"),
 		/1-2000/u,
 	);
+});
+
+test("successful native retry clears the transient assistant failure", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	compatibility.autoRetryByMember["coder-a"] = true;
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	const team = runtime.getState().teams.default;
+	assert.equal(team.executionTasks["task-a"].status, "SUBMITTED");
+	assert.equal(team.members["coder-a"].status, "IDLE");
+	assert.equal(team.members["coder-a"].health?.autoRetries, 1);
 });
 
 test("Loop uses same-task fix attempts and only Reviewer verifies and unlocks dependencies", async () => {
@@ -1513,8 +1579,37 @@ test("invalid execution report holds ownership and requires explicit recovery", 
 	const result = await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
 	assert.equal(runtime.getState().teams.default.executionTasks["task-a"].status, "REPORT_INVALID");
 	assert.equal(result.details.results?.[0].delta?.changed.status, "REPORT_INVALID");
-	assert.match(runtime.getState().teams.default.executionTasks["task-a"].lastIssue ?? "", /Final non-empty line/u);
+	assert.match(runtime.getState().teams.default.executionTasks["task-a"].lastIssue ?? "", /REPORT_ENVELOPE_MISSING/u);
+	assert.ok(runtime.getState().teams.default.executionTasks["task-a"].outputPath, "invalid report keeps the full round output path");
+	assert.equal(result.details.results?.[0].outputPath, runtime.getState().teams.default.executionTasks["task-a"].outputPath);
 	assert.equal(runtime.getState().teams.default.executionTasks["task-b"].status, "PENDING");
+});
+
+test("no new assistant text becomes a classified REPORT_INVALID without reusing prior output", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = "";
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	const result = await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	const task = runtime.getState().teams.default.executionTasks["task-a"];
+	assert.equal(task.status, "REPORT_INVALID");
+	assert.match(task.lastIssue ?? "", /REPORT_NO_ASSISTANT_TEXT/u);
+	assert.equal(result.details.results?.[0].output, "");
+	assert.equal(task.outputPath, undefined);
+});
+
+test("target mismatch is classified and preserves the member body", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("wrong-task");
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx);
+	await runtime.execute({ action: "run", taskId: "task-a", background: false }, ctx);
+	const task = runtime.getState().teams.default.executionTasks["task-a"];
+	assert.match(task.lastIssue ?? "", /REPORT_TARGET_MISMATCH/u);
+	assert.ok(task.outputPath);
+	assert.match(await readFile(task.outputPath!, "utf8"), /wrong-task/u);
 });
 
 test("read-only ExpertRound records evidence without ownership or verdict changes", async () => {
@@ -1563,6 +1658,22 @@ test("planned background completion sends compact delta and compact/full status 
 	const waited = await runtime.execute({ action: "wait", member: { id: "coder-a" } }, ctx);
 	assert.equal(waited.terminate, undefined);
 	assert.match(waited.details.results?.[0].output ?? "", /PRIVATE BODY/u, "wait explicitly collects the full result");
+});
+
+test("parallel background completions share one parent follow-up", async () => {
+	const compatibility = new FakeCompatibility();
+	compatibility.outputsByMember["coder-a"] = executionReport("task-a");
+	compatibility.outputsByMember["coder-b"] = executionReport("task-b");
+	const plan = structuredClone(PLAN);
+	plan.tasks[1].dependsOn = [];
+	const runtime = new TeamRuntime(compatibility, () => NOW, undefined, () => new FakeDashboard());
+	const ctx = context({ mode: "json" });
+	await registerPlan(runtime, ctx, plan);
+	await runtime.execute({ action: "parallel", taskIds: ["task-a", "task-b"], background: true }, ctx);
+	await waitFor(() => ctx.messages.length === 1);
+	assert.equal((ctx.messages[0].message.details as { completions: unknown[] }).completions.length, 2);
+	assert.match(ctx.messages[0].message.content, /execution\/task-a/u);
+	assert.match(ctx.messages[0].message.content, /execution\/task-b/u);
 });
 
 test("planned workspace is minimal and only Pi native auto-compaction remains wired", async (t) => {

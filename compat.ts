@@ -24,11 +24,15 @@ export interface CompactionResultLike {
 	estimatedTokensAfter?: number;
 }
 
+export interface PromptOptionsLike {
+	preflightResult?: (success: boolean) => void;
+}
+
 export interface RpcClientLike {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 	onEvent(listener: (event: any) => void): () => void;
-	prompt(message: string): Promise<void>;
+	prompt(message: string, options?: PromptOptionsLike): Promise<void>;
 	waitForIdle(timeout?: number): Promise<void>;
 	abort(): Promise<void>;
 	// Leader steer: passthrough of Pi's public RpcClient.steer (queue a steering
@@ -351,7 +355,7 @@ export class PiCompatibilityAdapter {
 			// (e.g. pi-model-cycler could silently change the member's model or
 			// behavior); the member prompt is fully carried by --append-system-prompt.
 			args.push("--no-extensions", "--no-skills", member.trusted ? "--approve" : "--no-approve", "--append-system-prompt", promptPath);
-			const client = this.factory({
+			const rawClient = this.factory({
 				cliPath,
 				cwd: member.cwd,
 				env: { PI_AGENT_TEAM_MEMBER: "1" },
@@ -359,6 +363,23 @@ export class PiCompatibilityAdapter {
 				model: member.model.id,
 				args,
 			});
+			// Pi's RPC client accepts images as prompt's second argument, not prompt options.
+			// Adapt the RPC acknowledgement to the orchestrator's preflight contract instead
+			// of accidentally serializing { preflightResult } as an image payload.
+			const client = new Proxy(rawClient, {
+				get(target, property, receiver) {
+					if (property !== "prompt") return Reflect.get(target, property, receiver);
+					return async (message: string, options?: PromptOptionsLike) => {
+						try {
+							await target.prompt(message);
+							options?.preflightResult?.(true);
+						} catch (error) {
+							options?.preflightResult?.(false);
+							throw error;
+						}
+					};
+				},
+			}) as RpcClientLike;
 			return { client, cleanupPrompt, restored };
 		} catch (error) {
 			await cleanupPrompt();
