@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { PiCompatibilityAdapter, type AdapterOverrides, type RpcClientLike } from "./compat.ts";
+
+// 能力发现默认读真实 agent 目录；契约测试指向不存在的目录以保持确定性。
+const NO_CAPABILITIES = { agentDir: "/nonexistent/pi-agent-team-test-agent-dir" };
 
 function fakeClient(): RpcClientLike {
 	return {
@@ -39,11 +44,13 @@ const BASE_MEMBER = {
 
 test("createMemberClient assembles an optional member head prompt before fixed instructions", async () => {
 	let promptPath = "";
+	let args: string[] = [];
 	const adapter = new PiCompatibilityAdapter({
 		version: "0.84.1",
 		cliPath: "/fake/pi",
+		capabilityOptions: NO_CAPABILITIES,
 		factory: (options) => {
-			const args = options.args ?? [];
+			args = options.args ?? [];
 			promptPath = args[args.indexOf("--append-system-prompt") + 1] ?? "";
 			return fakeClient();
 		},
@@ -52,6 +59,8 @@ test("createMemberClient assembles an optional member head prompt before fixed i
 	const handle = await adapter.createMemberClient({ ...BASE_MEMBER, headPrompt: "成员头部规则" });
 	const prompt = await readFile(promptPath, "utf8");
 	assert.ok(prompt.indexOf("成员头部规则") < prompt.indexOf("write only"));
+	// 成员保留技能发现：只隔离扩展，不传 --no-skills。
+	assert.equal(args.includes("--no-skills"), false);
 	await handle.cleanupPrompt();
 });
 
@@ -65,6 +74,7 @@ test("createMemberClient passes --session-id only when that session file already
 			return fakeClient();
 		},
 		listSessions: async () => [{ id: "existing-id" }],
+		capabilityOptions: NO_CAPABILITIES,
 	};
 	const adapter = new PiCompatibilityAdapter(overrides);
 
@@ -92,6 +102,7 @@ test("createMemberClient probe failure falls back to first launch (no warning pa
 		listSessions: async () => {
 			throw new Error("probe failed");
 		},
+		capabilityOptions: NO_CAPABILITIES,
 	};
 	const adapter = new PiCompatibilityAdapter(overrides);
 	const handle = await adapter.createMemberClient({ ...BASE_MEMBER, sessionId: "any-id" });
@@ -105,6 +116,7 @@ test("createMemberClient passes the optional public steer surface through untouc
 	const adapter = new PiCompatibilityAdapter({
 		version: "0.84.1",
 		cliPath: "/fake/pi",
+		capabilityOptions: NO_CAPABILITIES,
 		factory: () => {
 			created++;
 			return { ...fakeClient(), steer: async (message: string) => { steered.push(message); } };
@@ -121,6 +133,7 @@ test("createMemberClient passes the optional public steer surface through untouc
 	const bare = new PiCompatibilityAdapter({
 		version: "0.82.1",
 		cliPath: "/fake/pi",
+		capabilityOptions: NO_CAPABILITIES,
 		factory: () => {
 			const client = fakeClient();
 			delete (client as unknown as { steer?: unknown }).steer;
@@ -130,4 +143,103 @@ test("createMemberClient passes the optional public steer surface through untouc
 	});
 	const bareHandle = await bare.createMemberClient({ ...BASE_MEMBER, sessionId: "bare-session" });
 	assert.equal(bareHandle.client.steer, undefined);
+});
+
+async function withExtensionFixture(
+	version: string,
+	run: (args: string[], extensionDir: string) => Promise<void>,
+	memberOverrides: Partial<typeof BASE_MEMBER> = {},
+): Promise<void> {
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-agent-team-compat-"));
+	const extensionDir = join(agentDir, "extensions", "gotcha-recall");
+	await mkdir(extensionDir, { recursive: true });
+	await writeFile(join(extensionDir, "index.ts"), "export default () => undefined;\n", "utf8");
+	try {
+		let args: string[] = [];
+		const adapter = new PiCompatibilityAdapter({
+			version,
+			cliPath: "/fake/pi",
+			capabilityOptions: { agentDir },
+			factory: (options) => {
+				args = options.args ?? [];
+				return fakeClient();
+			},
+			listSessions: async () => [],
+		});
+		const handle = await adapter.createMemberClient({ ...BASE_MEMBER, sessionId: "caps-session", ...memberOverrides });
+		await run(args, extensionDir);
+		await handle.cleanupPrompt();
+	} finally {
+		await rm(agentDir, { recursive: true, force: true });
+	}
+}
+
+function loadedExtensions(args: string[]): string[] {
+	const loaded: string[] = [];
+	for (let index = 0; index < args.length; index++) {
+		if (args[index] === "--extension" && args[index + 1]) loaded.push(args[index + 1]);
+	}
+	return loaded;
+}
+
+test("createMemberClient loads allowlisted local extensions and builtin:mcp on current Pi", async () => {
+	await withExtensionFixture("1.4.0", async (args, extensionDir) => {
+		assert.ok(args.includes("--no-extensions"));
+		assert.deepEqual(loadedExtensions(args), [extensionDir, "builtin:mcp"]);
+	});
+});
+
+test("createMemberClient skips builtin:mcp below Pi 0.99.0 but keeps local extensions", async () => {
+	await withExtensionFixture("0.98.0", async (args, extensionDir) => {
+		assert.deepEqual(loadedExtensions(args), [extensionDir]);
+	});
+});
+
+test("createMemberClient includes builtin:mcp at the 0.99.0 boundary", async () => {
+	await withExtensionFixture("0.99.0", async (args, extensionDir) => {
+		assert.deepEqual(loadedExtensions(args), [extensionDir, "builtin:mcp"]);
+	});
+});
+
+test("createMemberClient exposes MCP tools through an explicit allowlist with mcp__*", async () => {
+	await withExtensionFixture(
+		"1.4.0",
+		async (args) => {
+			const tools = (args[args.indexOf("--tools") + 1] ?? "").split(",");
+			assert.ok(tools.includes("read"));
+			// 传了 --tools 时 Pi 只声明匹配条目的 MCP 工具，必须显式给通配。
+			assert.ok(tools.includes("mcp__*"));
+		},
+		{ tools: ["read", "bash"], allowMcpTools: true },
+	);
+});
+
+test("createMemberClient keeps MCP closed for read-only members unless they ask explicitly", async () => {
+	await withExtensionFixture(
+		"1.4.0",
+		async (args) => {
+			const tools = (args[args.indexOf("--tools") + 1] ?? "").split(",");
+			assert.equal(tools.includes("mcp__*"), false, "只读角色不自动扩到 MCP");
+		},
+		{ tools: ["read", "bash"] },
+	);
+	await withExtensionFixture(
+		"1.4.0",
+		async (args) => {
+			const tools = (args[args.indexOf("--tools") + 1] ?? "").split(",");
+			assert.ok(tools.includes("mcp__docs"), "显式列出的 MCP 工具照常可用");
+		},
+		{ tools: ["read", "mcp__docs"] },
+	);
+});
+
+test("createMemberClient omits mcp__* when builtin:mcp is skipped", async () => {
+	await withExtensionFixture(
+		"0.98.0",
+		async (args) => {
+			const tools = (args[args.indexOf("--tools") + 1] ?? "").split(",");
+			assert.equal(tools.includes("mcp__*"), false);
+		},
+		{ tools: ["read", "bash"] },
+	);
 });

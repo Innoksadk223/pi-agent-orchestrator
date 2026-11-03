@@ -7,9 +7,9 @@
 	<link rel="icon" href="data:,">
 	<title>Agent Workbench</title>
 	<style nonce="__CSP_NONCE__">
-		/* Hallmark · macrostructure: Workbench · genre: modern-minimal · theme: Cobalt
-		 * pre-emit critique: P5 H5 E5 S5 R5 V4 · tone: technical-austere · hierarchy: team overview first
-		 * contrast: pass (40–41) · mobile: pass (34, 49, 50–57) · slop: pass (58/58) · enrichment: none
+		/* Hallmark · macrostructure: Workbench + Map / Diagram · theme: custom
+		 * tone: 薄玻璃 · anchor hue: blue
+		 * 浅灰蓝、白色磨砂与互补暖橙；展示层覆盖位于本样式末尾。
 		 */
 		:root {
 			--paper: oklch(97.5% 0.007 255);
@@ -117,7 +117,8 @@
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
-			gap: var(--space-md);
+			flex-wrap: wrap;
+			gap: var(--space-xs) var(--space-md);
 			min-height: 3.5rem;
 			padding: var(--space-xs) max(var(--space-md), env(safe-area-inset-left));
 			border-bottom: var(--rule-thin) solid var(--rule);
@@ -167,7 +168,7 @@
 
 		.summarybar {
 			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 			border-bottom: var(--rule-thin) solid var(--summary-rule);
 			background: var(--summary);
 			color: var(--summary-ink);
@@ -208,6 +209,58 @@
 			display: grid;
 			min-width: 0;
 			background: var(--paper);
+		}
+		.stage {
+			display: grid;
+			position: relative;
+			min-width: 0;
+		}
+		.view-switch {
+			display: flex;
+			gap: var(--space-2xs);
+		}
+		.view-button {
+			padding: var(--space-2xs) var(--space-sm);
+			border: var(--rule-thin) solid var(--rule-strong);
+			border-radius: 999px;
+			background: var(--surface);
+			color: var(--ink-soft);
+			font-size: var(--text-sm);
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.view-button[aria-pressed="true"] {
+			border-color: var(--accent-ink);
+			background: var(--accent-soft);
+			color: var(--accent-ink);
+		}
+		.graph-view { display: none; min-width: 0; padding: var(--space-md); }
+		.graph-view__head { margin-bottom: var(--space-sm); }
+		.graph-hint { margin: 0; color: var(--ink-faint); font-size: var(--text-sm); }
+		.graph-root { min-width: 0; }
+		.panel-close {
+			display: none;
+			margin-inline-start: auto;
+			padding: var(--space-2xs) var(--space-sm);
+			border: var(--rule-thin) solid var(--rule-strong);
+			border-radius: 999px;
+			background: var(--surface);
+			color: var(--ink-soft);
+			font-size: var(--text-sm);
+			cursor: pointer;
+		}
+		
+		body[data-view="graph"] .graph-view { display: block; }
+		body[data-view="graph"] .member-rail { display: none; }
+		body[data-view="graph"] .workbench { grid-template-columns: minmax(0, 1fr); }
+		body[data-view="graph"] .panel-close { display: inline-flex; }
+		body[data-view="graph"][data-panel="closed"] .member-panel,
+		body[data-view="graph"][data-member="0"] .member-panel { display: none; }
+		body[data-view="graph"][data-panel="open"] .member-panel {
+			position: relative;
+			z-index: 1;
+			border: var(--rule-thin) solid var(--rule-strong);
+			border-radius: 8px;
 		}
 		.member-rail {
 			min-width: 0;
@@ -271,6 +324,7 @@
 			background: var(--surface);
 		}
 		.member-button[data-state="running"] .member-mark,
+		.member-button[data-state="tool"] .member-mark,
 		.member-button[data-state="starting"] .member-mark,
 		.member-button[data-state="retry"] .member-mark {
 			border-color: var(--accent-ink);
@@ -345,8 +399,21 @@
 
 		.member-panel {
 			min-width: 0;
+			min-height: 0;
+			overflow: hidden;
 			background: var(--surface);
 		}
+		.panel-content {
+			display: flex;
+			min-width: 0;
+			min-height: 0;
+			flex-direction: column;
+			height: 100%;
+		}
+		.panel-content[hidden], .panel-empty[hidden] { display: none; }
+		
+		
+
 		.panel-empty {
 			padding: var(--space-3xl) var(--space-md);
 			color: var(--ink-soft);
@@ -362,8 +429,8 @@
 		.panel-content[hidden], .panel-empty[hidden] { display: none; }
 		.member-header {
 			display: grid;
-			gap: var(--space-lg);
-			padding: var(--space-xl) clamp(var(--space-md), 3vw, var(--space-2xl));
+			gap: var(--space-2xs);
+			padding: var(--space-sm) clamp(var(--space-md), 3vw, var(--space-xl));
 			border-bottom: var(--rule-thin) solid var(--rule-strong);
 			background: var(--surface);
 		}
@@ -389,11 +456,10 @@
 			line-height: 1.05;
 			overflow-wrap: anywhere;
 		}
-		.member-heading p {
-			margin: var(--space-xs) 0 0;
-			color: var(--ink-soft);
-			font-size: var(--text-base);
-		}
+		
+		
+		
+		
 		.status-badge {
 			display: inline-flex;
 			align-items: center;
@@ -423,11 +489,14 @@
 			padding: 0.15em 0.6em;
 			font-size: var(--text-2xs);
 		}
-		.status-badge-sm::before {
-			width: 6px;
-			height: 6px;
-		}
-		.status-badge[data-state="running"] { color: var(--status-running-ink); background: var(--status-running-soft); border-color: var(--status-running-line); }
+		
+		
+		
+		
+		
+
+		.status-badge[data-state="running"],
+		.status-badge[data-state="tool"] { color: var(--status-running-ink); background: var(--status-running-soft); border-color: var(--status-running-line); }
 		.status-badge[data-state="starting"],
 		.status-badge[data-state="retry"] { color: var(--status-starting-ink); background: var(--status-starting-soft); border-color: var(--status-starting-line); }
 		.status-badge[data-state="error"] { color: var(--status-error-ink); background: var(--status-error-soft); border-color: var(--status-error-line); }
@@ -436,40 +505,36 @@
 		.status-badge[data-state="interrupted"] { color: var(--status-interrupted-ink); background: var(--status-interrupted-soft); border-color: var(--status-interrupted-line); }
 		.status-badge[data-state="idle"],
 		.status-badge[data-state="stopped"] { color: var(--status-idle-ink); background: var(--status-idle-soft); border-color: var(--status-idle-line); }
-		.task-block {
-			max-width: 72ch;
-			margin: 0;
-			padding-top: var(--space-md);
-			border-top: var(--rule-thin) solid var(--rule);
-			color: var(--ink-soft);
-			line-height: 1.6;
-			white-space: pre-wrap;
-			overflow-wrap: anywhere;
+		
+		
+		.assistant-output p { margin: 0 0 0.9em; text-wrap: pretty; }
+
+		body[data-view="graph"] .panes {
+			scrollbar-width: thin;
+			scrollbar-color: var(--ink-faint) var(--surface-strong);
 		}
-		.task-block strong {
-			color: var(--ink);
-			font-weight: 650;
+		body[data-view="graph"] .panes::-webkit-scrollbar { width: 8px; }
+		body[data-view="graph"] .panes::-webkit-scrollbar-track { background: var(--surface-strong); }
+		body[data-view="graph"] .panes::-webkit-scrollbar-thumb { border: 2px solid var(--surface-strong); border-radius: 999px; background: var(--ink-faint); }
+		body[data-view="graph"] .panes::-webkit-scrollbar-thumb:hover { background: var(--accent-ink); }
+		/* 原生滚动负责内容，固定滚动指示器在系统隐藏滚动条时显示其位置。 */
+		body[data-view="graph"] .panes::before,
+		body[data-view="graph"] .panes::after {
+			position: fixed; right: var(--detail-scrollbar-right, -100px); z-index: 60;
+			pointer-events: none; content: ""; opacity: var(--detail-scrollbar-opacity, 0);
 		}
-		.assistant-output p,
-		.task-block p {
-			margin: 0 0 0.6em;
+		body[data-view="graph"] .panes::before {
+			top: var(--detail-scrollbar-top, 0px); width: 8px; height: var(--detail-scrollbar-height, 0px);
+			border: 1px solid var(--rule); border-radius: 999px; background: var(--surface-strong);
 		}
-		.assistant-output p:last-child,
-		.task-block p:last-child {
-			margin-bottom: 0;
+		body[data-view="graph"] .panes::after {
+			top: var(--detail-scrollbar-thumb-top, 0px); width: 8px; height: var(--detail-scrollbar-thumb-height, 0px);
+			border: 2px solid var(--surface-strong); border-radius: 999px; background: var(--ink-faint);
 		}
 
-		.stream-grid {
-			min-width: 0;
-			background: var(--surface);
-		}
-		.stream-section {
-			min-width: 0;
-			padding: clamp(var(--space-md), 3vw, var(--space-xl));
-			border-bottom: var(--rule-thin) solid var(--rule);
-		}
-		.output-section { background: var(--surface); }
-		.activity-section { background: var(--paper); }
+		
+		
+		
 		.usage-section { background: var(--surface-muted); }
 		.section-head {
 			display: flex;
@@ -491,133 +556,23 @@
 			font-variant-numeric: tabular-nums;
 			white-space: nowrap;
 		}
-		.output-section .section-head { margin-bottom: var(--space-lg); }
-		.output-section .section-title { font-size: var(--text-md); }
-		.activity-section > .section-head {
-			margin-bottom: 0;
-			padding-bottom: var(--space-sm);
-			border-bottom: var(--rule-thin) solid var(--rule-strong);
-			cursor: pointer;
-			list-style: none;
-		}
-		.activity-section > .section-head::-webkit-details-marker { display: none; }
-		.activity-section > .section-head::after {
-			content: "+";
-			color: var(--ink-soft);
-			font-family: var(--font-mono);
-		}
-		.activity-section[open] > .section-head {
-			margin-bottom: var(--space-sm);
-		}
-		.activity-section[open] > .section-head::after { content: "−"; }
-		.activity-section .section-title {
-			font-family: var(--font-mono);
-			font-size: var(--text-xs);
-			letter-spacing: 0.05em;
-			text-transform: uppercase;
-		}
-		.assistant-output {
-			max-width: 72ch;
-			min-height: 7rem;
-			margin: 0;
-			color: var(--ink);
-			font-family: var(--font-body);
-			font-size: var(--text-base);
-			line-height: 1.7;
-			overflow-wrap: anywhere;
-			white-space: pre-wrap;
-		}
+		
+		
+		
+		
+		
+		
+		
+		
+		
 		.assistant-output[data-empty="true"] { color: var(--ink-faint); }
-		.task-block :is(h1, h2, h3, h4),
-		.assistant-output :is(h1, h2, h3, h4) {
-			margin: 0.8em 0 0.3em;
-			font-size: 1.05em;
-			color: var(--ink);
-		}
-		.task-block pre,
-		.assistant-output pre {
-			margin: 0.5em 0;
-			padding: var(--space-sm) var(--space-md);
-			background: var(--surface-muted);
-			border: var(--rule-thin) solid var(--rule);
-			border-radius: var(--radius-sm);
-			overflow-x: auto;
-		}
-		.task-block pre code,
-		.assistant-output pre code {
-			font-size: 0.9em;
-			line-height: 1.5;
-		}
-		.task-block code,
-		.assistant-output code {
-			font-family: var(--font-mono);
-			font-size: 0.9em;
-			background: var(--surface-muted);
-			border-radius: var(--radius-xs);
-			padding: 0.05em 0.3em;
-		}
-		.task-block ul,
-		.task-block ol,
-		.assistant-output ul,
-		.assistant-output ol {
-			margin: 0.4em 0;
-			padding-left: 1.4em;
-		}
-		.task-block blockquote,
-		.assistant-output blockquote {
-			margin: 0.4em 0;
-			padding: var(--space-2xs) var(--space-sm);
-			border-inline-start: var(--rule-focus) solid var(--rule-strong);
-			background: var(--surface-muted);
-			color: var(--ink-soft);
-		}
-		.task-block a,
-		.assistant-output a {
-			color: var(--accent);
-		}
-		.activity-list {
-			margin: 0;
-			padding: 0;
-			list-style: none;
-		}
-		.activity-item {
-			display: grid;
-			grid-template-columns: 5.25rem minmax(0, 1fr);
-			gap: var(--space-sm);
-			padding: var(--space-sm) 0;
-			border-top: var(--rule-thin) solid var(--rule);
-			animation: activity-in var(--dur-entry) var(--ease-out) both;
-		}
-		.activity-item:first-child { border-top: 0; }
-		.activity-time {
-			padding-top: var(--space-2xs);
-			color: var(--ink-faint);
-			font-family: var(--font-mono);
-			font-size: var(--text-2xs);
-			font-variant-numeric: tabular-nums;
-			white-space: nowrap;
-		}
-		.activity-copy { min-width: 0; }
-		.activity-label {
-			display: block;
-			font-size: var(--text-base);
-			font-weight: 650;
-			overflow-wrap: anywhere;
-		}
-		.activity-detail {
-			display: block;
-			margin-top: var(--space-2xs);
-			color: var(--ink-soft);
-			font-family: var(--font-mono);
-			font-size: var(--text-sm);
-			line-height: 1.5;
-			overflow-wrap: anywhere;
-		}
-		.list-empty {
-			margin: 0;
-			padding: var(--space-sm) 0;
-			color: var(--ink-faint);
-		}
+		
+		
+		
+		
+		
+		
+		
 
 		.usage-grid {
 			display: grid;
@@ -681,26 +636,11 @@
 			font-variant-numeric: tabular-nums;
 			overflow-wrap: anywhere;
 		}
-		.tech-details {
-			margin-top: var(--space-md);
-			border-top: var(--rule-thin) solid var(--rule-strong);
-		}
-		.tech-details summary {
-			display: flex;
-			align-items: center;
-			min-height: 2.75rem;
-			color: var(--ink-soft);
-			cursor: pointer;
-			list-style: none;
-			white-space: nowrap;
-		}
-		.tech-details summary::-webkit-details-marker { display: none; }
-		.tech-details summary::after {
-			content: "+";
-			margin-inline-start: auto;
-			font-family: var(--font-mono);
-		}
-		.tech-details[open] summary::after { content: "−"; }
+		
+		
+		
+		
+		
 		.tech-list {
 			display: grid;
 			gap: var(--space-xs);
@@ -766,6 +706,27 @@
 		.model-feedback[data-state="ok"] { color: var(--accent-ink); }
 		.model-feedback[data-state="error"] { color: var(--warn-ink); }
 		.model-feedback[data-state="pending"] { color: var(--ink-soft); }
+		.member-control {
+			margin-top: var(--space-md);
+			padding-top: var(--space-sm);
+			border-top: var(--rule-thin) solid var(--rule-strong);
+		}
+		.control-row {
+			display: flex;
+			flex-wrap: wrap;
+			gap: var(--space-sm);
+		}
+		.control-button {
+			padding: var(--space-2xs) var(--space-sm);
+			border: var(--rule-thin) solid var(--rule-strong);
+			border-radius: var(--radius-sm, 6px);
+			background: transparent;
+			color: var(--ink-strong);
+			cursor: pointer;
+			font-size: var(--text-sm);
+		}
+		.control-button:disabled { opacity: 0.55; cursor: default; }
+		.control-button:not(:disabled):hover { border-color: var(--accent); }
 		.ended-banner {
 			padding: var(--space-sm) var(--space-md) max(var(--space-sm), env(safe-area-inset-bottom));
 			border-top: var(--rule-thin) solid var(--rule-strong);
@@ -775,10 +736,6 @@
 		}
 		.ended-banner[hidden] { display: none; }
 
-		@keyframes activity-in {
-			from { opacity: 0; transform: translateY(var(--space-xs)); }
-			to { opacity: 1; transform: translateY(0); }
-		}
 		.member-button:active { transform: translateY(var(--rule-thin)); }
 		.member-button:disabled {
 			border-color: var(--rule);
@@ -786,17 +743,13 @@
 			cursor: not-allowed;
 			opacity: 0.55;
 		}
-		.tech-details summary:active { color: var(--ink-strong); }
+		
 		@media (hover: hover) and (pointer: fine) {
 			.member-button:hover { background: var(--surface); }
 			.member-button[aria-selected="true"]:hover { background: var(--accent-soft); }
 			.member-button:disabled:hover { background: var(--surface-muted); }
-			.activity-section > .section-head:hover,
-			.tech-details summary:hover { color: var(--ink); }
-		}
-		@media (min-width: 40rem) {
-			.topbar { padding-inline: clamp(var(--space-lg), 3vw, var(--space-xl)); }
-			.summarybar { grid-template-columns: repeat(3, minmax(8rem, 1fr)); }
+			
+			.summarybar { grid-template-columns: repeat(2, minmax(8rem, 1fr)); }
 			.metric { padding-inline: clamp(var(--space-lg), 3vw, var(--space-xl)); }
 			.member-heading-row {
 				flex-wrap: nowrap;
@@ -821,27 +774,25 @@
 				grid-template-columns: minmax(0, 1fr);
 				gap: var(--space-2xs);
 			}
-			.stream-grid {
-				display: grid;
-				grid-template-columns: minmax(0, 1.45fr) minmax(20rem, 0.8fr);
-			}
-			.output-section,
-			.activity-section { border-inline-end: var(--rule-thin) solid var(--rule-strong); }
-			.usage-section {
-				grid-column: 2;
-				grid-row: 1 / span 2;
-			}
-		}
-		@media (min-width: 90rem) {
-			.workbench,
-			.summarybar,
-			.topbar {
-				max-width: 96rem;
-				margin-inline: auto;
-			}
 			.topbar,
 			.workbench { border-inline: var(--rule-thin) solid var(--rule); }
 			.summarybar { border-inline: var(--rule-thin) solid var(--summary-rule); }
+		}
+		@media (min-width: 60rem) {
+			body[data-view="graph"][data-panel="open"] .stage {
+				grid-template-columns: minmax(0, 1.6fr) minmax(22rem, 24rem);
+				gap: var(--space-md); padding: var(--space-md);
+				min-height: calc(100svh - 8.25rem);
+			}
+			body[data-view="graph"][data-panel="open"] .member-panel { max-height: calc(100svh - 8.25rem); }
+		}
+		@media (max-width: 59.99rem) {
+			body[data-view="graph"][data-panel="open"] .member-panel {
+				position: fixed; inset: 12px; z-index: 50; overflow: hidden;
+				border-radius: 8px; background: var(--paper);
+			}
+			body[data-view="graph"][data-panel="open"] .panel-content { height: 100%; }
+			body[data-view="graph"][data-panel="open"] 
 		}
 		@media (prefers-reduced-motion: no-preference) {
 			@keyframes badge-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
@@ -861,15 +812,731 @@
 				animation-iteration-count: 1 !important;
 				transition-duration: 0.01ms !important;
 			}
-			.activity-item { animation: none !important; }
 			.member-button:active { transform: none !important; }
+		}
+
+		/* Dashboard glass presentation */
+		/* Hallmark · custom app tokens · 薄玻璃 / 错位底板 · 蓝灰 60 / 玻璃白 30 / 暖橙 10（视觉权重目标） */
+		:root {
+		  --color-paper: #c2e2d6;
+		  --color-paper-light: #c2e2d6;
+		  --color-paper-deep: #cadff0;
+		  --color-paper-slate: #cadff0;
+		  --color-surface: #f2f8f5;
+		  --color-ink: #13211b;
+		  --color-ink-strong: #0c1712;
+		  --color-ink-soft: #3d5348;
+		  --color-ink-faint: #43594c;
+		  --color-material-ink: #2c453a;
+		  --color-primary: #2c8f6c;
+		  --color-primary-ink: #12543a;
+		  --color-primary-soft: #e2f3ea;
+		  --color-accent: #2c8f6c;
+		  --color-accent-ink: #12543a;
+		  --color-accent-soft: #e2f3ea;
+		  --color-focus: #0b3d2a;
+		  --color-rule: rgb(20 60 45 / 0.14);
+		  --color-rule-strong: rgb(20 60 45 / 0.24);
+		  --color-highlight: rgb(255 255 255 / 0.62);
+		  --color-highlight-soft: rgb(255 255 255 / 0.24);
+		  --color-shadow: rgb(8 38 28 / 0.2);
+		  --color-shadow-soft: rgb(8 38 28 / 0.12);
+		  --color-shadow-inset: rgb(8 38 28 / 0.14);
+		  --color-glass-top: rgb(255 255 255 / 0.58);
+		  --color-glass-center: rgb(255 255 255 / 0.38);
+		  --color-glass-clear: rgb(255 255 255 / 0.28);
+		  --color-glass-bottom: rgb(255 255 255 / 0.24);
+		  --color-glass-lens-top: rgb(255 255 255 / 0.56);
+		  --color-glass-lens-center: rgb(255 255 255 / 0.42);
+		  --color-glass-lens-clear: rgb(255 255 255 / 0.36);
+		  --color-glass-lens-bottom: rgb(255 255 255 / 0.5);
+		  --color-glass-stage: rgb(255 255 255 / 0.2);
+		  --color-glass-panel-top: rgb(255 255 255 / 0.56);
+		  --color-glass-control: rgb(255 255 255 / 0.34);
+		  --color-glass-recess: rgb(12 58 44 / 0.1);
+		  --color-glass-selected: rgb(255 255 255 / 0.62);
+		  --color-board-top: rgb(172 222 204 / 0.55);
+		  --color-board-bottom: rgb(170 208 226 / 0.52);
+		  --color-board-selected-top: rgb(150 206 184 / 0.68);
+		  --color-board-selected-bottom: rgb(148 192 218 / 0.65);
+		  --color-board-panel-top: rgb(255 255 255 / 0.34);
+		  --color-board-panel-bottom: rgb(255 255 255 / 0.3);
+		  --color-board-control: rgb(214 241 230 / 0.5);
+		  --color-clear: rgb(255 255 255 / 0);
+		  --color-connected: #1d7a56;
+		  --color-connected-soft: rgb(255 255 255 / 0.5);
+		  --canvas-fill:
+		    radial-gradient(ellipse 64% 54% at 3% -6%, rgb(255 246 230 / 0.6) 0%, transparent 62%),
+		    radial-gradient(ellipse 80% 72% at 5% 4%, rgb(198 238 222 / 0.9) 0%, transparent 60%),
+		    radial-gradient(ellipse 84% 80% at 99% 102%, rgb(198 220 238 / 0.92) 0%, transparent 62%),
+		    linear-gradient(148deg, #c2e2d6 0%, #cadff0 100%);
+		  --glass-raise: linear-gradient(178deg, var(--color-glass-top) 0%, var(--color-glass-center) 62%, var(--color-glass-bottom) 100%);
+		  --glass-body: rgb(255 255 255 / 0.14);
+		  --glass-dense: linear-gradient(180deg, rgb(255 255 255 / 0.58) 0%, rgb(255 255 255 / 0.38) 62%, rgb(255 255 255 / 0.3) 100%);
+		  --glass-fill: var(--glass-raise);
+		  --glass-node-fill: linear-gradient(135deg, var(--color-glass-lens-top) 0%, var(--color-glass-lens-center) 40%, var(--color-glass-lens-clear) 74%, var(--color-glass-lens-bottom) 100%);
+		  --glass-panel-fill: rgb(255 255 255 / 0.16);
+		  --board-fill: linear-gradient(140deg, var(--color-board-top), var(--color-board-bottom));
+		  --board-selected-fill: linear-gradient(140deg, var(--color-board-selected-top), var(--color-board-selected-bottom));
+		  --board-panel-fill: linear-gradient(150deg, var(--color-board-panel-top), var(--color-board-panel-bottom));
+		  --glass-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 0 0 1px rgb(16 58 44 / 0.1), 0 14px 28px -18px rgb(8 38 28 / 0.5);
+		  --glass-node-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85), 0 0 0 1px rgb(16 58 44 / 0.08), 0 12px 22px -16px rgb(8 38 28 / 0.55);
+		  --glass-board-shadow: 6px 10px 20px -8px rgb(8 38 28 / 0.45);
+		  --glass-panel-shadow: inset 0 1px 0 rgb(255 255 255 / 0.92), 0 0 0 1px rgb(16 58 44 / 0.1), 0 34px 64px -30px rgb(8 38 28 / 0.72), 0 6px 14px -4px rgb(8 38 28 / 0.22);
+		  --glass-pressed-shadow: inset 0 2px 6px rgb(8 38 28 / 0.22), inset 0 -1px 0 rgb(255 255 255 / 0.5);
+		  --glass-selected-shadow: inset 0 1px 0 rgb(255 255 255 / 0.95), 0 0 0 2px var(--color-accent), 0 12px 22px -16px rgb(8 38 28 / 0.55);
+		  /* 主 Agent 深色底板：全页唯一实心深色面，其余卡片保持浅玻璃。 */
+		  --color-leader-top: #16503c;
+		  --color-leader-bottom: #0d3a2b;
+		  --color-leader-line: rgb(255 255 255 / 0.26);
+		  --color-leader-ink: #ffffff;
+		  --color-leader-ink-soft: rgb(255 255 255 / 0.78);
+		  --color-leader-ink-faint: rgb(255 255 255 / 0.6);
+		  --leader-fill: linear-gradient(165deg, var(--color-leader-top) 0%, var(--color-leader-bottom) 100%);
+		  --leader-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16), 0 0 0 1px rgb(8 38 28 / 0.3), 0 18px 30px -16px rgb(8 38 28 / 0.72);
+		  /* 连线涌动：常驻用主色，投递脉冲更强。 */
+		  --color-flow: var(--color-primary-ink);
+		  --color-flow-burst: var(--color-focus);
+		  /* 归属丝带：淡绿填充，活跃时加深；末端收窄由脚本按几何生成。 */
+		  --color-ribbon: rgb(18 84 58 / 0.14);
+		  --color-ribbon-live: rgb(18 84 58 / 0.38);
+		  /* 输出强调色：暖橙只用在标题短条与行内重点，守 60/30/10 权重。 */
+		  --color-emphasis: oklch(70% 0.15 58);
+		  --color-emphasis-soft: oklch(88% 0.09 68);
+		  /* 收边卡：有色薄片在下、玻璃在上，薄片从右侧与下方露出一道边。 */
+		  --color-card-plate-top: rgb(178 210 220 / 0.66);
+		  --color-card-plate-bottom: rgb(160 196 220 / 0.6);
+		  --card-plate-fill: linear-gradient(145deg, var(--color-card-plate-top), var(--color-card-plate-bottom));
+		  --card-plate-shadow: 4px 7px 14px -6px rgb(8 38 28 / 0.42);
+		  --glass-card-fill: linear-gradient(135deg, rgb(255 255 255 / 0.46) 0%, rgb(255 255 255 / 0.3) 46%, rgb(255 255 255 / 0.26) 78%, rgb(255 255 255 / 0.4) 100%);
+		  --font-display: "Avenir Next", "PingFang SC", -apple-system, sans-serif;
+		  --font-body: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+		  --font-mono: "SFMono-Regular", Menlo, ui-monospace, monospace;
+		  --text-2xs: 0.6875rem;
+		  --text-xs: 0.75rem;
+		  --text-sm: 0.8125rem;
+		  --text-base: 1rem;
+		  --text-md: 1.0625rem;
+		  --text-lg: 1.375rem;
+		  --text-xl: 1.75rem;
+		  --space-2xs: 0.25rem;
+		  --space-xs: 0.5rem;
+		  --space-sm: 0.75rem;
+		  --space-md: 1rem;
+		  --space-lg: 1.5rem;
+		  --space-xl: 2rem;
+		  --radius-sm: 0.625rem;
+		  --radius-md: 0.875rem;
+		  --radius-card: 1.25rem;
+		  --radius-panel: 1.5rem;
+		  --radius-pill: 999px;
+		  --blur-chrome: 20px;
+		  --blur-stage: 18px;
+		  --blur-panel: 26px;
+		  --plate-offset-x: 3px;
+		  --plate-offset-y: 7px;
+		  --plate-angle: -2deg;
+		  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+		  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+		  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+		  --dur-micro: 100ms;
+		  --dur-short: 180ms;
+		  --z-backplate: -2;
+		  --z-backdrop: -1;
+		  --z-raised: 2;
+		  --z-panel: 50;
+		  --paper: var(--color-paper);
+		  --surface: var(--color-surface);
+		  --surface-strong: var(--color-primary-soft);
+		  --surface-muted: var(--color-glass-recess);
+		  --ink: var(--color-ink);
+		  --ink-strong: var(--color-ink-strong);
+		  --ink-soft: var(--color-ink-soft);
+		  --ink-faint: var(--color-ink-faint);
+		  --rule: var(--color-rule);
+		  --rule-strong: var(--color-rule-strong);
+		  /* 保留通信与用量的蓝色语义；暖橙用于选择、焦点和操作强调。 */
+		  --accent: var(--color-primary);
+		  --accent-soft: var(--color-primary-soft);
+		  --accent-ink: var(--color-primary-ink);
+		  --focus: var(--color-focus);
+		  --summary: var(--color-glass-top);
+		  --summary-strong: var(--color-clear);
+		  --summary-ink: var(--color-ink);
+		  --summary-soft: var(--color-ink-faint);
+		  --summary-rule: var(--color-rule);
+		}
+
+		/* Hallmark · macrostructure: Map / Diagram · tone: 薄玻璃 · anchor hue: blue
+		 * theme: custom · scope: Dashboard presentation
+		 * reference: 薄玻璃 / 错位底板 · axes: light / system-native / blue + complementary orange
+		 * Only backplates tilt; product controls and communication semantics stay unchanged.
+		 */
+		html { background: var(--color-paper-deep); }
+		body {
+		  isolation: isolate;
+		  min-height: 100svh;
+		  padding: var(--space-md) clamp(var(--space-sm), 2vw, var(--space-xl)) var(--space-lg);
+		  background: var(--canvas-fill);
+		  background-attachment: fixed;
+		}
+		button, select { font-family: var(--font-body); }
+		button { white-space: nowrap; }
+		:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
+
+		.topbar, .summarybar, .workbench { max-width: 96rem; margin-inline: auto; border-inline: 0; }
+		.topbar {
+		  display: grid;
+		  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+		  gap: var(--space-md);
+		  min-height: 4.5rem;
+		  padding: var(--space-sm) var(--space-lg);
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-panel);
+		  background: var(--glass-fill);
+		  box-shadow: var(--glass-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		  backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		}
+		.brand { align-items: center; gap: var(--space-sm); }
+		.brand-name { font-size: var(--text-md); font-weight: 700; }
+		.connection {
+		  justify-self: end;
+		  min-height: 2rem;
+		  padding: var(--space-2xs) var(--space-sm);
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-pill);
+		  background: var(--color-glass-control);
+		  font-family: var(--font-body);
+		  font-size: var(--text-xs);
+		}
+		.connection[data-state="live"] { color: var(--color-connected); background: var(--color-connected-soft); }
+		.connection[data-state="live"]::before { border-color: var(--color-connected); background: var(--color-connected); }
+		.view-switch {
+		  padding: var(--space-2xs);
+		  gap: var(--space-2xs);
+		  border: 1px solid var(--color-rule);
+		  border-radius: var(--radius-md);
+		  background: var(--color-glass-recess);
+		  box-shadow: var(--glass-pressed-shadow);
+		}
+		.view-button {
+		  min-height: 2.5rem;
+		  padding: var(--space-xs) var(--space-md);
+		  border-color: var(--color-clear);
+		  border-radius: var(--radius-sm);
+		  background: var(--color-clear);
+		  font-size: var(--text-sm);
+		  transition: transform var(--dur-micro) var(--ease-out);
+		}
+		.view-button[aria-pressed="true"] {
+		  border-color: var(--color-highlight);
+		  background: var(--glass-node-fill), var(--color-board-control);
+		  box-shadow: var(--glass-node-shadow);
+		  color: var(--color-accent-ink);
+		}
+		.view-button:active { transform: translateY(1px); }
+		.summarybar {
+		  margin-top: var(--space-sm);
+		  padding: var(--space-sm) var(--space-lg);
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-card);
+		  background: var(--glass-fill);
+		  box-shadow: var(--glass-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		  backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		}
+		.metric {
+		  display: flex;
+		  align-items: baseline;
+		  gap: var(--space-md);
+		  padding: var(--space-2xs) var(--space-lg);
+		  border-inline-end-color: var(--color-rule);
+		}
+		.metric:first-child { padding-inline-start: 0; background: var(--color-clear); }
+		.metric-label { font-family: var(--font-body); font-size: var(--text-xs); letter-spacing: 0; }
+		.metric-value, #active-count { margin-top: 0; color: var(--color-ink); font-size: var(--text-lg); font-weight: 650; }
+		#active-count { color: var(--color-accent-ink); }
+
+		.workbench, .stage { min-height: 0; background: var(--color-clear); }
+		.graph-view { padding: var(--space-md) 0 0; }
+		.graph-view__head { margin: 0 0 var(--space-sm); padding-inline: var(--space-xs); }
+		.graph-hint { color: var(--color-ink-soft); font-size: var(--text-xs); line-height: 1.6; }
+		.graph-root .cg-root {
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-panel);
+		  background: var(--color-glass-stage);
+		  box-shadow: var(--glass-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-stage));
+		  backdrop-filter: blur(var(--blur-stage));
+		}
+		.cg-root .cg-scroll { max-height: calc(100svh - 15rem); min-height: 24rem; scrollbar-color: var(--color-rule-strong) var(--color-clear); }
+		.cg-root .cg-node {
+		  isolation: isolate;
+		  padding: var(--space-sm) var(--space-md) var(--space-sm) calc(var(--space-md) + var(--space-2xs));
+		  overflow: visible;
+		  border-color: var(--color-clear);
+		  border-radius: var(--radius-md);
+		  background: var(--color-clear);
+		  box-shadow: none;
+		  -webkit-backdrop-filter: none;
+		  backdrop-filter: none;
+		  transition: border-color var(--dur-micro) var(--ease-out);
+		}
+		.cg-root .cg-node::before,
+		.cg-root .cg-node::after {
+		  content: "";
+		  position: absolute;
+		  inset: 0;
+		  border-radius: inherit;
+		  pointer-events: none;
+		}
+		/* 收边卡：底板只轻微错位、不再旋转，玻璃前板材质不变。 */
+		.cg-root .cg-node::before {
+		  z-index: var(--z-backplate);
+		  inset: 1px 2px 2px;
+		  background: var(--card-plate-fill);
+		  box-shadow: var(--card-plate-shadow);
+		  transform: translate(3px, 6px);
+		}
+		.cg-root .cg-node::after {
+		  z-index: var(--z-backdrop);
+		  border: 1px solid var(--color-highlight);
+		  background: var(--glass-card-fill);
+		  box-shadow: var(--glass-node-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		  backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+		}
+		.cg-root .cg-rail { top: 8px; bottom: 8px; left: 5px; width: 4px; border-radius: 2px; box-shadow: 0 0 0 1px var(--color-highlight-soft); }
+		.cg-root .cg-node[aria-pressed="true"] { outline: 0; background: var(--color-clear); box-shadow: none; }
+		.cg-root .cg-node[aria-pressed="true"]::before { background: var(--board-selected-fill); transform: translate(3px, 6px); }
+		.cg-root .cg-node[aria-pressed="true"]::after { border-color: var(--color-accent); box-shadow: var(--glass-selected-shadow); }
+		.cg-root .cg-node[aria-pressed="true"] .cg-rail { width: 6px; }
+		.cg-root button.cg-node:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 4px; }
+		.cg-root button.cg-node:active { transform: translateY(1px); }
+		.cg-root .cg-name { font-size: var(--text-base); font-weight: 650; }
+		.cg-root .cg-role { font-size: var(--text-xs); color: var(--color-material-ink); }
+		.cg-root .cg-badge { padding: 0; border-radius: 0; background: var(--color-clear); font-size: var(--text-2xs); font-weight: 600; }
+		.cg-root .cg-action { padding-top: var(--space-2xs); border-top-color: var(--color-rule); font-size: var(--text-xs); color: var(--color-material-ink); }
+		.cg-root .cg-node[data-leader="true"] { padding: var(--space-md) var(--space-lg); border-color: var(--color-leader-line); }
+		.cg-root .cg-node[data-leader="true"]::before { display: none; }
+		.cg-root .cg-node[data-leader="true"]::after {
+		  border-color: var(--color-leader-line);
+		  background: var(--leader-fill);
+		  box-shadow: var(--leader-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.1);
+		  backdrop-filter: blur(var(--blur-chrome)) saturate(1.1);
+		}
+		.cg-root .cg-node[data-leader="true"] .cg-name { font-size: var(--text-lg); color: var(--color-leader-ink); }
+		.cg-root .cg-node[data-leader="true"] .cg-role { color: var(--color-leader-ink-soft); }
+		.cg-root .cg-node[data-leader="true"] .cg-badge { color: var(--color-leader-ink); }
+		.cg-root .cg-node[data-leader="true"] .cg-action { border-top-color: var(--color-leader-line); color: var(--color-leader-ink-soft); }
+		.cg-root .cg-stats { color: var(--color-leader-ink-faint); }
+		.cg-root .cg-stats b { color: var(--color-leader-ink); }
+		.cg-root .cg-team { font-size: var(--text-xs); font-weight: 600; color: var(--color-material-ink); }
+		.cg-root .cg-ribbon { fill: var(--color-ribbon); }
+		.cg-root .cg-ribbon[data-live="true"] { fill: var(--color-ribbon-live); }
+		.cg-root .cg-flow { stroke: var(--color-flow); }
+		.cg-root .cg-flow[data-burst="true"] { stroke: var(--color-flow-burst); }
+		.cg-root .cg-edge-label {
+		  padding: var(--space-2xs) var(--space-xs);
+		  border-color: var(--color-highlight);
+		  border-radius: var(--radius-sm);
+		  background: var(--color-glass-panel-top);
+		  box-shadow: var(--glass-node-shadow);
+		  font-size: var(--text-2xs);
+		}
+		.cg-root .cg-legend { border-top-color: var(--color-highlight); background: var(--color-glass-control); font-size: var(--text-xs); padding: var(--space-sm) var(--space-lg); }
+		.cg-root .cg-legend i { width: 20px; }
+		.cg-root .cg-legend .cg-legend-base { border-top: 0; height: 5px; border-radius: 3px; background: var(--color-ribbon-live); }
+		.cg-root .cg-legend .cg-legend-flow { border-top: 0; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--color-clear), var(--color-flow) 50%, var(--color-clear)); }
+		.cg-root .cg-legend .cg-legend-message { border-color: var(--color-flow-burst); }
+		.cg-root .cg-legend .cg-legend-queued { border-color: var(--warn); }
+		.cg-root .cg-legend .cg-legend-failed { border-color: var(--status-error-line); }
+
+		.member-panel, body[data-view="graph"][data-panel="open"] .member-panel {
+		  position: relative;
+		  isolation: isolate;
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-panel);
+		  background: var(--color-clear);
+		  box-shadow: var(--glass-panel-shadow);
+		}
+		/* 模糊留在独立前板；浅蓝底板保证长文阅读，不改变固定滚动指示器的坐标系。 */
+		.member-panel::before,
+		.member-panel::after {
+		  content: "";
+		  position: absolute;
+		  inset: 0;
+		  border-radius: inherit;
+		  pointer-events: none;
+		}
+		.member-panel::after { z-index: var(--z-backplate); background: var(--board-panel-fill); }
+		.member-panel::before {
+		  z-index: var(--z-backdrop);
+		  background: var(--glass-panel-fill);
+		  box-shadow: inset 1px 1px 0 var(--color-highlight), inset -1px -1px 0 var(--color-highlight-soft);
+		  -webkit-backdrop-filter: blur(var(--blur-panel));
+		  backdrop-filter: blur(var(--blur-panel));
+		}
+		
+		.panel-close, .model-apply, .control-button {
+		  min-height: 2.5rem;
+		  padding: var(--space-xs) var(--space-md);
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-sm);
+		  background: var(--glass-node-fill);
+		  box-shadow: var(--glass-node-shadow);
+		  font-size: var(--text-sm);
+		  font-weight: 500;
+		  transition: transform var(--dur-micro) var(--ease-out);
+		}
+		.panel-close { min-height: 2rem; font-size: var(--text-xs); }
+		.panel-close:active, .model-apply:not(:disabled):active, .control-button:not(:disabled):active { transform: translateY(1px); box-shadow: var(--glass-pressed-shadow); }
+		.member-header { padding: var(--space-md) var(--space-lg) var(--space-lg); border-bottom-color: var(--color-rule); background: var(--color-clear); gap: var(--space-md); }
+		.member-heading h1 { font-size: var(--text-xl); font-weight: 700; line-height: 1.2; }
+		.member-heading { flex-basis: 10rem; }
+		
+		
+		.status-badge { font-size: var(--text-xs); border-color: var(--color-clear); }
+		.status-badge-sm { font-size: var(--text-2xs); }
+		
+		
+		
+		.usage-grid { border: 0; background: var(--color-clear); }
+		
+		.usage-item { border: 0; background: var(--color-clear); }
+		
+		.usage-label { font-family: var(--font-body); font-size: var(--text-2xs); letter-spacing: 0; }
+		
+		.section-meta { font-size: var(--text-2xs); }
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		.usage-context { border: 0; border-radius: var(--radius-md); background: var(--color-glass-control); padding: var(--space-md); box-shadow: var(--glass-pressed-shadow); }
+		.context-track { border: 0; background: var(--color-glass-recess); box-shadow: var(--glass-pressed-shadow); border-radius: var(--radius-pill); }
+		.context-fill { border-radius: var(--radius-pill); }
+		.usage-detail { font-size: var(--text-xs); white-space: normal; }
+		
+		
+		.model-switch .section-title, .member-control .section-title { margin-bottom: var(--space-sm); font-size: var(--text-sm); }
+		.model-select { min-height: 2.5rem; padding: var(--space-xs) var(--space-sm); border-color: var(--color-rule-strong); border-radius: var(--radius-sm); background: var(--color-glass-control); box-shadow: var(--glass-pressed-shadow); font-size: var(--text-sm); }
+		.model-select:disabled, .model-apply:disabled, .control-button:disabled { opacity: 1; color: var(--color-ink-soft); background: var(--color-glass-recess); box-shadow: none; border-color: var(--color-rule); }
+		.model-feedback { margin-top: var(--space-xs); font-size: var(--text-xs); line-height: 1.55; }
+
+		body[data-view="workbench"] .workbench { margin-top: var(--space-md); gap: var(--space-md); }
+		.member-rail {
+		  padding: var(--space-sm);
+		  border: 1px solid var(--color-highlight);
+		  border-radius: var(--radius-card);
+		  background: var(--glass-raise);
+		  box-shadow: var(--glass-shadow);
+		  -webkit-backdrop-filter: blur(var(--blur-stage)) saturate(1.35);
+		  backdrop-filter: blur(var(--blur-stage)) saturate(1.35);
+		}
+		.rail-head { padding: var(--space-xs) var(--space-xs) var(--space-md); border-bottom: 0; }
+		.rail-title { font-size: var(--text-sm); }
+		.member-list { gap: var(--space-xs); }
+		.member-button { min-height: 5rem; border-radius: var(--radius-md); padding: var(--space-md) var(--space-sm); }
+		.member-button[aria-selected="true"] { border-color: var(--color-highlight); background: var(--glass-node-fill), var(--color-board-control); box-shadow: var(--glass-node-shadow); }
+		.member-name { font-size: var(--text-sm); }
+		.member-role { font-size: var(--text-2xs); }
+		.member-context { font-size: var(--text-2xs); }
+		.context-mini { height: 4px; border: 0; background: rgb(12 58 44 / 0.14); border-radius: var(--radius-pill); box-shadow: inset 0 1px 2px rgb(8 38 28 / 0.18); }
+		@media (hover:hover) and (pointer:fine) {
+		  .cg-root button.cg-node:hover::after { border-color: var(--color-accent); }
+		  .member-button:hover { background: var(--color-glass-control); }
+		  .member-button[aria-selected="true"]:hover { background: var(--glass-dense); }
+		  .panel-close:hover, .control-button:not(:disabled):hover, .model-apply:not(:disabled):hover { border-color: var(--color-rule-strong); }
+		}
+		@media (min-width:60rem) {
+		  body[data-view="graph"][data-panel="open"] .stage { grid-template-columns: minmax(0,1fr) minmax(24rem,28rem); gap: var(--space-lg); padding: var(--space-md) 0 0; min-height: 0; }
+		  body[data-view="graph"][data-panel="open"] .graph-view { padding-top: 0; }
+		  body[data-view="graph"][data-panel="open"] .member-panel { max-height: calc(100svh - 12rem); }
+		  body[data-view="workbench"] .workbench { grid-template-columns: minmax(17rem,19rem) minmax(0,1fr); height: calc(100svh - 12rem); min-height: 32rem; }
+		  body[data-view="workbench"] .member-rail { overflow-y: auto; }
+		  body[data-view="workbench"] .member-panel { height: 100%; }
+		  body[data-view="workbench"] .member-header { padding-block: var(--space-lg); }
+		}
+		@media (min-width:72rem) {
+		  body[data-view="workbench"] .usage-context { background: var(--color-glass-control); }
+		}
+		@media (max-width:59.99rem) {
+		  body { padding: var(--space-sm); }
+		  .topbar { grid-template-columns: minmax(0,1fr) auto; gap: var(--space-sm); padding: var(--space-md); }
+		  .brand { grid-column: 1 / -1; }
+		  .view-switch { grid-row: 2; justify-self: start; }
+		  .connection { grid-row: 2; padding-inline: var(--space-xs); }
+		  .summarybar { padding: var(--space-sm) var(--space-md); }
+		  .metric { display: grid; gap: var(--space-xs); padding-inline: var(--space-sm); }
+		  .metric-value, #active-count { font-size: var(--text-lg); }
+		  .cg-root .cg-scroll { min-height: 22rem; max-height: calc(100svh - 19rem); }
+		  /* 覆盖层压在页面上，玻璃要更实，否则下层文字会透上来。 */
+		  body[data-view="graph"][data-panel="open"] .member-panel { position: fixed; inset: var(--space-sm); z-index: var(--z-panel); background: rgb(255 255 255 / 0.62); border-radius: var(--radius-panel); }
+		  .member-list { grid-template-columns: minmax(0,1fr); }
+		  /* 覆盖层几乎铺满屏，图例从面板下缘露出来只会显得脏。 */
+		  body[data-view="graph"][data-panel="open"] .cg-legend { visibility: hidden; }
+		  .panel-close, .control-button, .model-apply, .model-select { min-height: 2.75rem; }
+		  .member-header { padding: var(--space-md); }
+		  
+		  
+		}
+		@media (max-width:30rem) {
+		  .member-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; }
+		  .member-metric:nth-child(4) { padding-left: 0; border-left: 0; }
+		  .member-metric:nth-child(n+4) { padding-top: 8px; border-top: 1px solid rgb(12 58 44 / 0.08); }
+		}
+		@media (max-width:24rem) {
+		  .brand-name { font-size: var(--text-base); }
+		  .brand { gap: var(--space-xs); }
+		  .view-button { padding-inline: var(--space-sm); font-size: var(--text-xs); }
+		  .connection { font-size: var(--text-2xs); gap: var(--space-2xs); }
+		  .metric-label { font-size: var(--text-2xs); }
+		  .metric-value, #active-count { font-size: var(--text-md); }
+		  .member-heading h1 { font-size: var(--text-lg); }
+		}
+		/* ── 成员详情面板 v2 · 三行头 + 输出/活动/设置 ──
+		 * 层次靠明暗差：头部台面抬起、页签压进凹槽、正文下沉、设置卡片再抬回。
+		 */
+		.member-panel { background: var(--glass-body); }
+		.panel-content { position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; }
+		.panel-content::after {
+		  content: ""; position: absolute; inset: auto 1px 1px; height: 42px; pointer-events: none;
+		  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+		  background: linear-gradient(rgb(255 255 255 / 0), rgb(255 255 255 / 0.52) 62%, rgb(255 255 255 / 0.7));
+		}
+		.member-header {
+		  position: relative; z-index: 3;
+		  display: grid; gap: 12px;
+		  padding: var(--space-md) var(--space-lg) var(--space-sm);
+		  border-bottom: 1px solid rgb(255 255 255 / 0.5);
+		  background: var(--glass-raise);
+		  box-shadow: 0 10px 18px -14px rgb(8 38 28 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.95);
+		}
+		.member-title-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+		.member-title-row h1 {
+		  flex: 1 1 auto; min-width: 0; margin: 0;
+		  font-family: var(--font-display); font-size: 1.0625rem; font-weight: 700;
+		  letter-spacing: -0.022em; line-height: 1.25; overflow-wrap: anywhere;
+		}
+		/* 关闭按钮的叉用两条描边画，避免 ✕ 字形自带的左右留白把图标推偏。 */
+		.panel-close {
+		  position: relative; flex: none; display: block;
+		  width: 28px; height: 28px; min-height: 0; padding: 0;
+		  border-radius: var(--radius-pill); font-size: 0; line-height: 0; color: var(--color-ink-soft);
+		}
+		.panel-close::before,
+		.panel-close::after {
+		  content: ""; position: absolute; top: 50%; left: 50%;
+		  width: 11px; height: 1.5px; border-radius: 1px; background: currentColor;
+		}
+		.panel-close::before { transform: translate(-50%, -50%) rotate(45deg); }
+		.panel-close::after { transform: translate(-50%, -50%) rotate(-45deg); }
+		.panel-close:hover { color: var(--color-ink); }
+		.member-task-block {
+		  min-width: 0; padding: 9px 11px 10px;
+		  border: 1px solid rgb(255 255 255 / 0.72);
+		  border-radius: var(--radius-sm);
+		  background: rgb(12 58 44 / 0.05);
+		  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.8);
+		}
+		.member-task-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-width: 0; }
+		.member-task-key {
+		  display: inline-flex; align-items: center; gap: 6px;
+		  flex: none; font-family: var(--font-mono); font-size: 10px;
+		  letter-spacing: 0.08em; color: var(--color-material-ink);
+		}
+		.member-task-key::before {
+		  content: ""; width: 5px; height: 5px; border-radius: 50%;
+		  background: var(--color-primary-ink); opacity: 0.7;
+		}
+		.member-task-text {
+		  margin: 4px 0 0; min-width: 0;
+		  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+		  font-size: var(--text-sm); font-weight: 500; line-height: 1.5; color: var(--color-ink);
+		}
+		.control-row { display: flex; flex: none; gap: var(--space-2xs); }
+		.control-row[hidden] { display: none; }
+		.control-button {
+		  min-height: 0; padding: 4px 11px; border-radius: var(--radius-pill);
+		  font-size: var(--text-2xs); font-weight: 600;
+		  background: var(--glass-dense); border-color: rgb(255 255 255 / 0.72);
+		  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9), 0 4px 10px -6px rgb(8 38 28 / 0.5);
+		}
+		.member-metrics {
+		  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+		  padding-top: 8px; border-top: 1px solid rgb(12 58 44 / 0.1);
+		}
+		.member-metric {
+		  display: grid; gap: 2px; min-width: 0;
+		  padding: 0 10px; border-left: 1px solid rgb(12 58 44 / 0.09);
+		}
+		.member-metric:first-child { padding-left: 0; border-left: 0; }
+		.member-metric i {
+		  font-style: normal; font-family: var(--font-body); font-size: 10px;
+		  letter-spacing: 0.03em; color: var(--color-material-ink); white-space: nowrap;
+		}
+		.member-metric strong {
+		  min-width: 0; font-size: var(--text-sm); font-weight: 650; color: var(--color-ink);
+		  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+		}
+		#control-feedback { margin-top: 0; font-size: var(--text-2xs); line-height: 1.5; }
+		#control-feedback::before {
+		  content: ""; display: inline-block; width: 5px; height: 5px;
+		  margin-right: 6px; border-radius: 50%; background: currentColor;
+		  vertical-align: 0.08em; opacity: 0.5;
+		}
+		#control-feedback[data-state="pending"]::before { background: var(--color-primary-ink); opacity: 1; }
+		.panel-tabs {
+		  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;
+		  margin: var(--space-xs) var(--space-sm) 0; padding: 5px;
+		  border-radius: var(--radius-pill);
+		  background: rgb(12 58 44 / 0.12);
+		  box-shadow: inset 0 2px 6px rgb(8 38 28 / 0.22), inset 0 -1px 0 rgb(255 255 255 / 0.45);
+		}
+		.panel-tab {
+		  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+		  min-height: 2rem; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--radius-pill);
+		  background: none; color: var(--color-ink-soft);
+		  font-size: var(--text-xs); font-weight: 600; cursor: pointer;
+		}
+		.panel-tab[aria-selected="true"] {
+		  color: var(--color-primary-ink); background: rgb(255 255 255 / 0.82);
+		  border-color: rgb(255 255 255 / 0.95);
+		  box-shadow: 0 6px 12px -6px rgb(8 38 28 / 0.45), inset 0 1px 0 rgb(255 255 255);
+		}
+		.panes {
+		  position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+		  margin-top: var(--space-xs);
+		  scrollbar-width: thin; scrollbar-color: var(--color-rule-strong) transparent;
+		  box-shadow: inset 0 12px 16px -14px rgb(8 38 28 / 0.55);
+		}
+		.pane { padding: var(--space-sm) var(--space-md) var(--space-lg); }
+		.pane[hidden] { display: none; }
+		.pane .section-head { margin-bottom: var(--space-xs); }
+		.pane .section-title { font-size: var(--text-sm); }
+		/* 富文本输出：编辑式层级——标题级差、暖橙荧光重点、等宽芯片、微凹代码块。 */
+		.assistant-output :is(h1, h2, h3, h4) { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em; color: var(--color-ink-strong); }
+		.assistant-output h1 { margin: 1.7em 0 0.7em; padding-left: 0.6em; font-size: 1.35rem; line-height: 1.35; border-left: 4px solid var(--color-emphasis); }
+		.assistant-output h2 { margin: 1.5em 0 0.55em; padding-left: 0.55em; font-size: 1.15rem; line-height: 1.4; border-left: 3px solid var(--color-emphasis); }
+		.assistant-output h3 { display: flex; align-items: center; gap: 0.42em; margin: 1.35em 0 0.45em; font-size: 1rem; }
+		.assistant-output h3::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 1px; background: var(--color-emphasis); }
+		.assistant-output h4 { margin: 1.2em 0 0.4em; font-size: 0.95rem; font-weight: 650; color: var(--color-primary-ink); }
+		.assistant-output :is(h1, h2, h3, h4):first-child { margin-top: 0; }
+		.assistant-output :is(ul, ol) { margin: 0 0 0.9em; padding-inline-start: 1.3em; }
+		.assistant-output li { margin-bottom: 0.35em; }
+		.assistant-output ul > li::marker { color: var(--color-primary); }
+		.assistant-output ol > li::marker { color: var(--color-primary); font-weight: 650; font-variant-numeric: tabular-nums; }
+		.assistant-output pre {
+		  position: relative; margin: 0 0 0.95em; padding: 15px 14px 15px 16px; overflow-x: auto; overscroll-behavior-x: contain;
+		  border: 1px solid rgb(20 60 45 / 0.14); border-radius: 10px;
+		  background: rgb(16 58 44 / 0.1);
+		  box-shadow: inset 0 3px 9px rgb(8 38 28 / 0.22), inset 0 -1px 0 rgb(255 255 255 / 0.55);
+		  font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.65;
+		}
+		.assistant-output pre[data-lang] { padding-top: 24px; }
+		.assistant-output pre[data-lang]::before {
+		  content: attr(data-lang); position: absolute; top: 7px; right: 11px;
+		  color: var(--color-ink-faint); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+		}
+		.assistant-output pre[data-lang]::after {
+		  content: ""; position: absolute; top: 13px; left: 0; width: 2px; height: 18px;
+		  border-radius: 2px; background: var(--color-emphasis);
+		}
+		.assistant-output pre code { font: inherit; }
+		.assistant-output :not(pre) > code {
+		  padding: 0.08em 0.4em; border: 1px solid rgb(255 255 255 / 0.9); border-radius: 6px;
+		  background: rgb(255 255 255 / 0.62); color: var(--color-ink-strong);
+		  font-family: var(--font-mono); font-size: 0.875em;
+		}
+		.assistant-output blockquote {
+		  margin: 0 0 0.9em; padding: 0.55em 0.9em; border-left: 3px solid var(--color-primary); border-radius: 0 8px 8px 0;
+		  background: rgb(255 255 255 / 0.3); color: var(--color-ink-soft);
+		}
+		.assistant-output a { color: var(--color-primary-ink); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+		.assistant-output em { color: var(--color-ink-soft); font-style: normal; }
+		.assistant-output strong {
+		  padding: 0 0.12em; border-radius: 2px; color: var(--color-ink); font-weight: 650;
+		  background: linear-gradient(180deg, transparent 50%, var(--color-emphasis-soft) 50%);
+		  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+		}
+		.pane-output .assistant-output { min-height: 0; max-width: 66ch; font-size: 1rem; line-height: 1.8; color: var(--color-ink); }
+		.usage-card {
+		  margin-bottom: var(--space-sm); padding: var(--space-sm) var(--space-md);
+		  border: 1px solid rgb(255 255 255 / 0.62); border-radius: var(--radius-md);
+		  background: var(--glass-dense);
+		  box-shadow: 0 10px 18px -14px rgb(8 38 28 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.9);
+		}
+		.usage-card:last-child { margin-bottom: 0; }
+		.usage-card .section-head { margin-bottom: var(--space-xs); }
+		.usage-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-xs) var(--space-2xs); }
+		.usage-item { padding: 0; }
+		.usage-label { font-family: var(--font-body); font-size: var(--text-2xs); color: var(--color-material-ink); }
+		.usage-value { font-size: var(--text-sm); }
+		.role-detail-full {
+		  padding: 0; background: none; border: 0;
+		  font-size: var(--text-sm); line-height: 1.7; color: var(--color-ink-soft);
+		  white-space: pre-wrap; overflow-wrap: anywhere;
+		}
+		.tech-list { display: grid; gap: 1px; margin: 0; }
+		.tech-row { display: flex; justify-content: space-between; gap: var(--space-sm); padding: 4px 0; border-bottom: 1px solid rgb(255 255 255 / 0.42); }
+		.tech-row:last-child { border-bottom: 0; }
+		.tech-row dt { margin: 0; font-size: var(--text-xs); color: var(--color-material-ink); }
+		.tech-row dd { margin: 0; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--color-ink); text-align: right; overflow-wrap: anywhere; }
+		.model-switch-row { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+		.model-switch-row .model-select { flex: 1 1 7rem; min-width: 0; }
+		.usage-context { padding: 0; border: 0; background: none; box-shadow: none; }
+		.usage-context[hidden] { display: none; }
+		.context-track { height: 6px; margin-bottom: var(--space-xs); }
+		.usage-detail { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--color-material-ink); }
+		/* 工作面板里面板很宽，内容与页签收在与阅读宽度相称的一列，避免控件被拉成整行。 */
+		body[data-view="workbench"] .pane { max-width: 56rem; margin-inline: auto; }
+		body[data-view="workbench"] .panel-tabs { max-width: 40rem; margin-inline: auto; }
+		@media (min-width:60rem) {
+		  body[data-view="graph"][data-panel="open"] .stage { grid-template-columns: minmax(0, 1fr) minmax(30rem, 34rem); }
+		}
+		@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+		  .topbar, .summarybar, .member-rail, .member-panel, body[data-view="graph"][data-panel="open"] .member-panel,
+		  .graph-root .cg-root, .cg-root .cg-node:not([data-leader="true"]), .cg-root .cg-node[aria-pressed="true"] { background: var(--color-surface); }
+		  .cg-root .cg-node:not([data-leader="true"])::before, .cg-root .cg-node::after, .member-panel::before, .member-panel::after { display: none; }
+		  .cg-root .cg-node[data-leader="true"] { background: var(--leader-fill); }
+		  .cg-root .cg-node[aria-pressed="true"] { border-color: var(--color-accent); box-shadow: var(--glass-selected-shadow); }
+		}
+		@media (prefers-reduced-transparency:reduce) {
+		  .topbar, .summarybar, .member-rail, .member-panel, body[data-view="graph"][data-panel="open"] .member-panel,
+		  .graph-root .cg-root, .cg-root .cg-node:not([data-leader="true"]), .cg-root .cg-node[aria-pressed="true"] { background: var(--color-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+		  .cg-root .cg-node:not([data-leader="true"])::before, .cg-root .cg-node::after, .member-panel::before, .member-panel::after { display: none; }
+		  .cg-root .cg-node[data-leader="true"] { background: var(--leader-fill); -webkit-backdrop-filter: none; backdrop-filter: none; }
+		  .cg-root .cg-node[aria-pressed="true"] { border-color: var(--color-accent); box-shadow: var(--glass-selected-shadow); }
+		}
+		@media (prefers-reduced-motion:reduce) {
+		  .view-button, .cg-root .cg-node, .panel-close, .model-apply, .control-button { transition: none; }
+		  .cg-root .cg-flow { animation: none; stroke-opacity: 0; }
+		  .view-button:active, .cg-root button.cg-node:active, .panel-close:active, .model-apply:active, .control-button:active { transform: none; }
 		}
 	</style>
 </head>
-<body>
+<body data-view="graph" data-member="0" data-panel="closed">
 	<header class="topbar">
 		<div class="brand">
 			<p class="brand-name">Agent Workbench</p>
+		</div>
+		<div class="view-switch" role="group" aria-label="视图切换">
+			<button id="view-graph" class="view-button" type="button" aria-pressed="true">协作图</button>
+			<button id="view-workbench" class="view-button" type="button" aria-pressed="false">工作面板</button>
 		</div>
 		<div id="connection" class="connection" data-state="connecting" role="status" aria-live="polite">正在连接</div>
 	</header>
@@ -878,10 +1545,6 @@
 		<div class="metric">
 			<span class="metric-label">活动成员</span>
 			<strong id="active-count" class="metric-value">0</strong>
-		</div>
-		<div class="metric">
-			<span class="metric-label">总轮次</span>
-			<strong id="turn-count" class="metric-value">0</strong>
 		</div>
 		<div class="metric">
 			<span class="metric-label">已连接</span>
@@ -899,26 +1562,54 @@
 			<p id="rail-empty" class="rail-empty">等待成员注册。</p>
 		</aside>
 
-		<main id="member-panel" class="member-panel" role="tabpanel" tabindex="-1" aria-live="off">
+		<div class="stage">
+			<section id="graph-view" class="graph-view" aria-label="团队协作图">
+				<div class="graph-view__head">
+					<p class="graph-hint">点击成员展开详情；图内滚动查看。运行中的成员优先获得焦点，空闲后回到手选成员。涌动的连线表示该成员正在活动，不代表对方已读；加亮脉冲表示运行时已接受或已投递。</p>
+				</div>
+				<div id="graph-root" class="graph-root"></div>
+			</section>
+
+			<main id="member-panel" class="member-panel" role="tabpanel" tabindex="-1" aria-live="off">
 			<div id="panel-empty" class="panel-empty">
-				<strong>等待实时活动</strong>
-				成员可见后，任务与输出状态会显示在这里。
+				<strong id="panel-empty-title">等待实时活动</strong>
+				<span id="panel-empty-note">成员可见后，任务与输出状态会显示在这里。</span>
 			</div>
 
 			<div id="panel-content" class="panel-content" hidden>
 				<header class="member-header">
-					<div class="member-heading-row">
-						<div class="member-heading">
-							<h1 id="selected-name">—</h1>
-							<p id="selected-role">—</p>
-						</div>
+					<div class="member-title-row">
+						<h1 id="selected-name">—</h1>
 						<div id="selected-status" class="status-badge" data-state="idle">等待</div>
+						<button id="panel-close" class="panel-close" type="button" aria-label="关闭详情">✕</button>
 					</div>
-					<div id="selected-task" class="task-block"><strong>任务：</strong>等待接收。</div>
+					<div class="member-task-block">
+						<div class="member-task-head">
+							<span class="member-task-key">当前任务</span>
+							<div id="member-control-row" class="control-row">
+								<button id="member-stop" class="control-button" type="button" disabled>停止</button>
+								<button id="member-resume" class="control-button" type="button" disabled>继续</button>
+							</div>
+						</div>
+						<p id="selected-task" class="member-task-text">等待接收。</p>
+					</div>
+					<div class="member-metrics" aria-label="成员用量">
+						<span class="member-metric"><i>上下文</i><strong id="metric-context">—</strong></span>
+						<span class="member-metric"><i>输入</i><strong id="usage-input">0</strong></span>
+						<span class="member-metric"><i>输出</i><strong id="usage-output">0</strong></span>
+						<span class="member-metric"><i>成本</i><strong id="usage-cost">$0.0000</strong></span>
+						<span class="member-metric"><i>时长</i><strong id="member-elapsed">00:00</strong></span>
+					</div>
+					<p id="control-feedback" class="model-feedback" data-state="idle" role="status" hidden></p>
 				</header>
 
-				<div class="stream-grid">
-					<section class="stream-section output-section" aria-labelledby="output-title">
+				<nav id="panel-tabs" class="panel-tabs" role="tablist" aria-label="成员详情分区">
+					<button id="tab-output" class="panel-tab" type="button" role="tab" aria-selected="true" aria-controls="pane-output" data-pane="output">输出</button>
+					<button id="tab-usage" class="panel-tab" type="button" role="tab" aria-selected="false" aria-controls="pane-usage" data-pane="usage">设置</button>
+				</nav>
+
+				<div id="panel-panes" class="panes">
+					<section id="pane-output" class="pane pane-output" role="tabpanel" aria-labelledby="tab-output">
 						<div class="section-head">
 							<h2 id="output-title" class="section-title">Assistant 输出</h2>
 							<span id="output-size" class="section-meta">0 chars</span>
@@ -926,46 +1617,54 @@
 						<div id="assistant-output" class="assistant-output" data-empty="true">等待模型输出。</div>
 					</section>
 
-					<details class="stream-section activity-section" aria-labelledby="activity-title">
-						<summary class="section-head">
-							<span id="activity-title" class="section-title">实时活动</span>
-							<span id="activity-count" class="section-meta">0 events</span>
-						</summary>
-						<ol id="activity-list" class="activity-list"></ol>
-						<p id="activity-empty" class="list-empty">尚无活动。</p>
-					</details>
-
-					<section class="stream-section usage-section" aria-labelledby="usage-title">
-						<div class="section-head">
-							<h2 id="usage-title" class="section-title">累计用量</h2>
-							<span id="member-elapsed" class="section-meta">00:00</span>
-						</div>
-						<div id="usage-context" class="usage-context" hidden>
-							<span class="usage-label">上下文占用</span>
-							<strong id="usage-context-value" class="usage-value">—</strong>
-							<div id="usage-context-track" class="context-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="上下文占用">
-								<div id="usage-context-fill" class="context-fill"></div>
+					<section id="pane-usage" class="pane pane-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>
+						<section class="usage-card" aria-labelledby="usage-title">
+							<div class="section-head">
+								<h2 id="usage-title" class="section-title">累计用量</h2>
 							</div>
-							<span id="usage-context-detail" class="usage-detail">—</span>
-						</div>
-						<div class="usage-grid">
-							<div class="usage-item"><span class="usage-label">输入</span><strong id="usage-input" class="usage-value">0</strong></div>
-							<div class="usage-item"><span class="usage-label">输出</span><strong id="usage-output" class="usage-value">0</strong></div>
-							<div class="usage-item"><span class="usage-label">缓存读取</span><strong id="usage-cache" class="usage-value">0</strong></div>
-							<div class="usage-item"><span class="usage-label">缓存写入</span><strong id="usage-write" class="usage-value">0</strong></div>
-							<div class="usage-item"><span class="usage-label">轮次</span><strong id="usage-turns" class="usage-value">0</strong></div>
-							<div class="usage-item"><span class="usage-label">成本</span><strong id="usage-cost" class="usage-value">$0.0000</strong></div>
-						</div>
-						<details class="tech-details">
-							<summary>技术详情</summary>
+							<div class="usage-grid">
+								<div class="usage-item"><span class="usage-label">输入</span><strong id="usage-input-detail" class="usage-value">0</strong></div>
+								<div class="usage-item"><span class="usage-label">输出</span><strong id="usage-output-detail" class="usage-value">0</strong></div>
+								<div class="usage-item"><span class="usage-label">缓存读取</span><strong id="usage-cache" class="usage-value">0</strong></div>
+								<div class="usage-item"><span class="usage-label">缓存写入</span><strong id="usage-write" class="usage-value">0</strong></div>
+								<div class="usage-item"><span class="usage-label">轮次</span><strong id="usage-turns" class="usage-value">0</strong></div>
+								<div class="usage-item"><span class="usage-label">成本</span><strong id="usage-cost-detail" class="usage-value">$0.0000</strong></div>
+							</div>
+						</section>
+
+						<section class="usage-card" aria-labelledby="context-title">
+							<div class="section-head">
+								<h2 id="context-title" class="section-title">上下文占用</h2>
+								<span id="usage-context-value" class="section-meta">—</span>
+							</div>
+							<div id="usage-context" class="usage-context" hidden>
+								<div id="usage-context-track" class="context-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="上下文占用">
+									<div id="usage-context-fill" class="context-fill"></div>
+								</div>
+								<span id="usage-context-detail" class="usage-detail">—</span>
+							</div>
+						</section>
+
+						<section class="usage-card" aria-labelledby="tech-title">
+							<div class="section-head">
+								<h2 id="tech-title" class="section-title">技术详情</h2>
+							</div>
 							<dl class="tech-list">
 								<div class="tech-row"><dt>Team</dt><dd id="tech-team">—</dd></div>
 								<div class="tech-row"><dt>Model</dt><dd id="tech-model">—</dd></div>
 								<div class="tech-row"><dt>Thinking</dt><dd id="tech-thinking">—</dd></div>
 								<div class="tech-row"><dt>Session</dt><dd id="tech-session">—</dd></div>
 							</dl>
-						</details>
-						<section class="model-switch" aria-labelledby="model-switch-title">
+						</section>
+
+						<section class="usage-card" aria-labelledby="role-title">
+							<div class="section-head">
+								<h2 id="role-title" class="section-title">成员职责</h2>
+							</div>
+							<div id="selected-role-full" class="role-detail-full">—</div>
+						</section>
+
+						<section class="usage-card model-switch" aria-labelledby="model-switch-title">
 							<h2 id="model-switch-title" class="section-title">成员模型与思考</h2>
 							<div class="model-switch-row">
 								<label class="sr-only" for="model-select">选择成员模型</label>
@@ -987,12 +1686,14 @@
 					</section>
 				</div>
 			</div>
-		</main>
+			</main>
+		</div>
 	</div>
 
 	<div id="ended-banner" class="ended-banner" role="status" hidden>Dashboard 已结束，可以关闭此页。</div>
 	<div id="announcer" class="sr-only" aria-live="polite"></div>
 
+	<script nonce="__CSP_NONCE__" src="./collaboration-graph.js"></script>
 	<script nonce="__CSP_NONCE__">
 		(() => {
 			"use strict";
@@ -1003,9 +1704,24 @@
 			const members = new Map();
 			let models = [];
 			let selectedKey = null;
+			let panelOpen = false;
+			let renderedOutputKey = "", renderQueued = false;
+			let activePane = "output";
+			let leaderState = null;
+			let panelReturnFocus = null;
+			let currentView = "graph";
+			let collaborationGraph = null;
+			const scriptNonce = document.currentScript.nonce;
 			let ended = false;
 			let heartbeatTimer;
 			let summaryTimer;
+			// 模型/思考草稿：与服务端已生效值分开保存，流式重绘不会冲掉用户的选择。
+			let modelDraft = null;
+			let modelPending = false;
+			let modelMessage = null;
+			let controlPending = false;
+			let controlMessage = null;
+			let controlMessageTimer = null;
 			const connectedAt = Date.now();
 			const number = new Intl.NumberFormat();
 			const money = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 });
@@ -1017,10 +1733,20 @@
 			const panelEmpty = byId("panel-empty");
 			const panelContent = byId("panel-content");
 			const announcer = byId("announcer");
+			const graphRoot = byId("graph-root");
+			const memberPanel = byId("member-panel");
+			const panelPanes = byId("panel-panes");
+			const panelTabs = byId("panel-tabs");
+			const viewGraph = byId("view-graph");
+			const viewWorkbench = byId("view-workbench");
+			const panelClose = byId("panel-close");
 			const modelSelect = byId("model-select");
 			const thinkingSelect = byId("thinking-select");
 			const modelApply = byId("model-apply");
 			const modelFeedback = byId("model-feedback");
+			const memberStop = byId("member-stop");
+			const memberResume = byId("member-resume");
+			const controlFeedback = byId("control-feedback");
 			const source = new EventSource("./events");
 
 			const statusLabel = (value) => {
@@ -1030,6 +1756,7 @@
 					STARTING: "启动中",
 					IDLE: "空闲",
 					RUNNING: "运行中",
+					TOOL: "工具中",
 					SETTLED: "已完成",
 					INTERRUPTED: "已中断",
 					STOPPED: "已停止",
@@ -1042,10 +1769,56 @@
 			const statusKey = (value) => {
 				const normalized = String(value || "idle").toLowerCase();
 				if (normalized.startsWith("retry")) return "retry";
-				for (const state of ["approved", "starting", "idle", "running", "settled", "interrupted", "stopped", "error"]) {
+				for (const state of ["approved", "starting", "idle", "running", "tool", "settled", "interrupted", "stopped", "error"]) {
 					if (normalized.startsWith(state)) return state;
 				}
 				return "idle";
+			};
+
+			const ACTIVE_STATES = new Set(["running", "tool", "starting", "retry"]);
+			const memberIsActive = (member) => ACTIVE_STATES.has(statusKey(member.communication?.active ? member.communication.status : member.status));
+			// 图跟随正在运行的成员：优先最近一次派发的活跃成员，空闲后回到手动选中的成员。
+			const activeFocusKey = () => {
+				let focus = null;
+				let latest = -1;
+				for (const [key, member] of members) {
+					if (!memberIsActive(member)) continue;
+					const started = Number(member.startedAt) || 0;
+					if (started >= latest) {
+						focus = key;
+						latest = started;
+					}
+				}
+				return focus;
+			};
+
+			// 无文本占位只看最近的进度活动，让“运行中但还没输出”可见。
+			// 纯记账条目（用量更新）每次都刷，会把真正有信息量的阶段顶掉，所以优先跳它们。
+			const BOOKKEEPING_LABELS = new Set(["累计用量已更新"]);
+			const latestActivity = (member) => {
+				for (let index = member.activities.length - 1; index >= 0; index -= 1) {
+					if (!BOOKKEEPING_LABELS.has(member.activities[index].label)) return member.activities[index];
+				}
+				return member.activities.length ? member.activities[member.activities.length - 1] : null;
+			};
+
+			const latestActivityLabel = (member) => {
+				const activity = latestActivity(member);
+				if (!activity) return "";
+				return activity.detail ? `${activity.label} · ${activity.detail}` : activity.label;
+			};
+
+			const emptyOutputLabel = (member) => {
+				const state = statusKey(member.status);
+				const stage = latestActivityLabel(member);
+				if (["running", "starting", "retry"].includes(state)) {
+					return stage ? `进行中：${stage}…` : "已启动，等待模型输出…";
+				}
+				if (state === "interrupted") return "已中断；本轮提示不会被自动重放。";
+				if (state === "stopped") return "已停止。";
+				if (state === "error") return "运行出错；本轮没有 assistant 文本。";
+				if (state === "settled" || state === "idle") return "本轮已结束，没有 assistant 文本。";
+				return "等待模型输出。";
 			};
 
 			const elapsed = (since) => {
@@ -1056,6 +1829,20 @@
 				return hours > 0
 					? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
 					: `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+			};
+
+			// Server-side mirror -> page view. Used both when a member view is first built and
+			// on a reconnecting bootstrap, so a refresh restores task/output/usage/progress.
+			const adoptMemberState = (member, restored) => {
+				if (!restored) return member;
+				member.status = restored.status ?? "APPROVED";
+				member.task = restored.task ?? "";
+				member.assistant = restored.assistant ?? "";
+				member.assistantStarted = Boolean(restored.assistantStarted);
+				member.activities = Array.isArray(restored.activities) ? restored.activities.slice() : [];
+				member.usage = restored.usage ?? member.usage;
+				member.startedAt = restored.startedAt ?? Date.now();
+				return member;
 			};
 
 			const createMember = (spec) => {
@@ -1069,18 +1856,7 @@
 					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, contextWindow: undefined, contextTokens: null, contextPercent: null },
 					startedAt: Date.now(),
 				};
-				// server mirrors runtime state so a page refresh restores task/output/usage
-				const restored = spec.state;
-				if (restored) {
-					member.status = restored.status ?? "APPROVED";
-					member.task = restored.task ?? "";
-					member.assistant = restored.assistant ?? "";
-					member.assistantStarted = Boolean(restored.assistantStarted);
-					member.activities = restored.activities ?? [];
-					member.usage = restored.usage ?? member.usage;
-					member.startedAt = restored.startedAt ?? Date.now();
-				}
-				return member;
+				return adoptMemberState(member, spec.state);
 			};
 
 			const addActivity = (member, label, detail = "") => {
@@ -1088,13 +1864,15 @@
 				if (member.activities.length > MAX_ACTIVITY) member.activities.splice(0, member.activities.length - MAX_ACTIVITY);
 			};
 
-			const mergeMembers = (incoming) => {
+			const mergeMembers = (incoming, adoptState = false) => {
 				for (const spec of incoming || []) {
 					const current = members.get(spec.key);
 					if (current) {
-						// state is only consumed when creating a member (refresh restore);
-						// skip it on merge so live members do not accumulate a dead mirror
-						const { state: _state, ...rest } = spec;
+						// state is only consumed when (re)building a view: on bootstrap the server
+						// mirror restores task/output/usage/progress after a refresh or SSE outage;
+						// on live merges it is skipped so it cannot clobber newer streamed text.
+						const { state, ...rest } = spec;
+						if (adoptState && state) adoptMemberState(current, state);
 						Object.assign(current, rest);
 					} else members.set(spec.key, createMember(spec));
 				}
@@ -1105,6 +1883,15 @@
 			const setConnection = (state, label) => {
 				connection.dataset.state = state;
 				connection.textContent = label;
+				if (collaborationGraph) collaborationGraph.setConnected(state === "live");
+			};
+
+			// 连接标签只由真实事件流状态推导：心跳 HTTP 成功只证明 /viewer 可达，
+			// 不能冒充 SSE 已连接；页面结束后任何迟到心跳都不得再改写状态。
+			const applyConnection = () => {
+				if (ended || document.visibilityState === "hidden") return;
+				if (source.readyState === EventSource.OPEN) setConnection("live", "实时连接");
+				else setConnection("connecting", "正在重连");
 			};
 
 			const renderMembers = () => {
@@ -1166,11 +1953,18 @@
 
 			const selectMember = (key, announce) => {
 				if (!members.has(key)) return;
+				// 切换成员时才重置草稿与上一次操作反馈，避免流式事件把它们冲掉。
+				if (selectedKey !== key) {
+					modelDraft = null;
+					modelMessage = null;
+					controlMessage = null;
+					clearTimeout(controlMessageTimer);
+				}
 				selectedKey = key;
 				render();
 				if (announce) {
 					announcer.textContent = `已切换到 ${members.get(key).id}`;
-					requestAnimationFrame(() => document.querySelector('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
+					if (currentView === "workbench") requestAnimationFrame(() => document.querySelector('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
 				}
 			};
 
@@ -1252,7 +2046,9 @@
 					}
 				};
 				for (const line of text.split("\n")) {
-					const fence = /^```(\w*)\s*$/.exec(line);
+					// 任意以 ``` 开头的行都算围栏：信息串可能带路径或冒号（```ts:src/a.ts），
+					// 不能要求它只由 \w 组成，否则闭合围栏会被当成新的开围栏、吞掉后文。
+					const fence = /^```(.*)$/.exec(line);
 					if (fence) {
 						flushPara();
 						list = null;
@@ -1263,7 +2059,8 @@
 							// opening fence: mount immediately so streaming output stays visible
 							pre = document.createElement("pre");
 							const code = document.createElement("code");
-							if (fence[1]) code.className = `lang-${fence[1]}`; // \w* only
+							const lang = /^[\w-]+$/u.test(fence[1].trim()) ? fence[1].trim() : "";
+							if (lang) { code.className = `lang-${lang}`; pre.dataset.lang = lang; }
 							pre.append(code);
 							root.append(pre);
 						}
@@ -1304,6 +2101,7 @@
 						list = null;
 						quote = null;
 						const envelopePre = document.createElement("pre");
+						envelopePre.dataset.lang = "json";
 						const envelopeCode = document.createElement("code");
 						envelopeCode.className = "lang-json"; // fixed literal, no user input in class
 						envelopeCode.textContent = trimmed;
@@ -1351,64 +2149,89 @@
 				return root;
 			};
 
-			const renderList = (element, empty, rows, renderRow) => {
-				element.replaceChildren();
-				for (const row of rows) element.append(renderRow(row));
-				empty.hidden = rows.length > 0;
+			const syncDetailScrollbar = () => {
+				const visible = currentView === "graph" && panelOpen && Boolean(selectedKey);
+				const viewport = panelPanes.clientHeight, content = panelPanes.scrollHeight, maxScroll = content - viewport;
+				if (!visible || viewport <= 0 || maxScroll <= 0) { panelPanes.style.setProperty("--detail-scrollbar-opacity", "0"); return; }
+				const rect = panelPanes.getBoundingClientRect(), thumbHeight = Math.max(32, Math.round((viewport / content) * viewport));
+				const thumbTop = rect.top + (panelPanes.scrollTop / maxScroll) * Math.max(0, viewport - thumbHeight);
+				panelPanes.style.setProperty("--detail-scrollbar-right", `${Math.max(0, window.innerWidth - rect.right + 1)}px`);
+				panelPanes.style.setProperty("--detail-scrollbar-top", `${rect.top}px`);
+				panelPanes.style.setProperty("--detail-scrollbar-height", `${viewport}px`);
+				panelPanes.style.setProperty("--detail-scrollbar-thumb-top", `${thumbTop}px`);
+				panelPanes.style.setProperty("--detail-scrollbar-thumb-height", `${thumbHeight}px`);
+				panelPanes.style.setProperty("--detail-scrollbar-opacity", "1");
+			};
+
+			const PANES = ["output", "usage"];
+			// applyPane 只同步 DOM（每次 SSE 重绘都会调用）；selectPane 才算一次用户切换。
+			const applyPane = (pane) => {
+				for (const name of PANES) {
+					const tab = byId(`tab-${name}`), body = byId(`pane-${name}`);
+					const selected = name === pane;
+					tab.setAttribute("aria-selected", String(selected));
+					tab.tabIndex = selected ? 0 : -1;
+					body.hidden = !selected;
+				}
+			};
+			const selectPane = (pane) => {
+				if (!PANES.includes(pane)) return;
+				activePane = pane;
+				applyPane(pane);
+				panelPanes.scrollTop = 0;
+				requestAnimationFrame(syncDetailScrollbar);
 			};
 
 			const renderSelected = () => {
 				const member = selectedKey ? members.get(selectedKey) : null;
 				panelEmpty.hidden = Boolean(member);
 				panelContent.hidden = !member;
-				if (!member) return;
+				if (!member) {
+					const hasMembers = members.size > 0;
+					byId("panel-empty-title").textContent = hasMembers ? "未选择成员" : "等待实时活动";
+					byId("panel-empty-note").textContent = hasMembers
+						? "从列表或协作图里选一位成员，任务与输出会显示在这里。"
+						: "成员可见后，任务与输出状态会显示在这里。";
+					syncDetailScrollbar();
+					return;
+				}
 				byId("selected-name").textContent = member.id;
-				byId("selected-role").textContent = member.role || "未提供角色";
+				byId("selected-role-full").textContent = member.role || "未提供角色";
 				const selectedStatus = byId("selected-status");
-				selectedStatus.dataset.state = statusKey(member.status);
-				selectedStatus.textContent = statusLabel(member.status);
+				const effectiveStatus = member.communication?.active ? member.communication.status : member.status;
+				selectedStatus.dataset.state = statusKey(effectiveStatus);
+				selectedStatus.textContent = statusLabel(effectiveStatus);
 				const task = byId("selected-task");
-				task.replaceChildren();
-				const taskLabel = document.createElement("strong");
-				taskLabel.textContent = "任务：";
-				task.append(taskLabel);
-				if (member.task) task.append(renderMarkdown(member.task));
-				else task.append(document.createTextNode("等待接收。"));
+				const taskText = member.task || "等待接收。";
+				task.textContent = taskText;
+				task.title = taskText;
 				const output = byId("assistant-output");
-				output.replaceChildren();
-				output.dataset.empty = String(!member.assistant);
-				if (member.assistant) output.append(renderMarkdown(member.assistant));
-				else output.textContent = "等待模型输出。";
+				// 只在「换了成员 / 文本真的变了 / 没有正在进行的选中」时重建：
+				// 每帧替换子节点会把用户正在拖选的文字和键盘焦点一起清掉。
+				const selection = document.getSelection();
+				const selecting = Boolean(selection && !selection.isCollapsed && output.contains(selection.anchorNode));
+				const outputKey = `${selectedKey}\u0000${member.status}\u0000${member.assistant}`;
+				if (!selecting && outputKey !== renderedOutputKey) {
+					renderedOutputKey = outputKey;
+					output.replaceChildren();
+					output.dataset.empty = String(!member.assistant);
+					if (member.assistant) output.append(renderMarkdown(member.assistant));
+					else output.textContent = emptyOutputLabel(member);
+				}
 				byId("output-size").textContent = `${number.format(member.assistant.length)} chars`;
-				byId("activity-count").textContent = `${number.format(member.activities.length)} events`;
 
-				renderList(byId("activity-list"), byId("activity-empty"), [...member.activities].reverse(), (activity) => {
-					const item = document.createElement("li");
-					const time = document.createElement("time");
-					const copy = document.createElement("span");
-					const label = document.createElement("span");
-					const detail = document.createElement("span");
-					item.className = "activity-item";
-					time.className = "activity-time";
-					time.dateTime = new Date(activity.at).toISOString();
-					time.textContent = new Date(activity.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-					copy.className = "activity-copy";
-					label.className = "activity-label";
-					label.textContent = activity.label;
-					detail.className = "activity-detail";
-					detail.textContent = activity.detail;
-					copy.append(label);
-					if (activity.detail) copy.append(detail);
-					item.append(time, copy);
-					return item;
-				});
-
-				byId("usage-input").textContent = number.format(member.usage.input);
-				byId("usage-output").textContent = number.format(member.usage.output);
+				const inputText = number.format(member.usage.input);
+				const outputText = number.format(member.usage.output);
+				const costText = money.format(member.usage.cost);
+				byId("usage-input").textContent = inputText;
+				byId("usage-output").textContent = outputText;
+				byId("usage-cost").textContent = costText;
+				byId("usage-input-detail").textContent = inputText;
+				byId("usage-output-detail").textContent = outputText;
+				byId("usage-cost-detail").textContent = costText;
 				byId("usage-cache").textContent = number.format(member.usage.cacheRead);
 				byId("usage-write").textContent = number.format(member.usage.cacheWrite);
 				byId("usage-turns").textContent = number.format(member.usage.turns);
-				byId("usage-cost").textContent = money.format(member.usage.cost);
 				const contextBlock = byId("usage-context");
 				const contextWindow = member.usage.contextWindow;
 				if (typeof contextWindow === "number" && contextWindow > 0) {
@@ -1416,6 +2239,7 @@
 					const percent = member.usage.contextPercent;
 					const known = typeof percent === "number";
 					byId("usage-context-value").textContent = known ? `${Math.round(percent)}%` : "计算中…";
+					byId("metric-context").textContent = known ? `${Math.round(percent)}%` : "计算中…";
 					byId("usage-context-fill").style.width = `${known ? Math.min(100, Math.max(0, percent)) : 0}%`;
 					byId("usage-context-track").setAttribute("aria-valuenow", String(known ? Math.round(percent) : 0));
 					contextBlock.dataset.state = known && percent >= 80 ? "high" : "normal";
@@ -1426,20 +2250,42 @@
 							: `${number.format(tokens)} / ${number.format(contextWindow)} tokens`;
 				} else {
 					contextBlock.hidden = true;
+					byId("metric-context").textContent = "—";
 				}
-				byId("member-elapsed").textContent = elapsed(member.startedAt);
+				byId("member-elapsed").textContent = member.startedAt > 0 ? elapsed(member.startedAt) : "尚未开始";
 				byId("tech-team").textContent = member.team;
 				byId("tech-model").textContent = member.model;
 				byId("tech-thinking").textContent = member.thinking;
 				byId("tech-session").textContent = member.sessionId;
 				renderModelSwitcher(member);
+				renderMemberControl(member);
+				applyPane(activePane);
+				syncDetailScrollbar();
 			};
 
 			const renderModelSwitcher = (member) => {
 				const catalogue = Array.isArray(models) ? models : [];
 				const current = member ? member.model : "";
-				const thinking = THINKING_LEVELS.includes(member?.thinking) ? member.thinking : "medium";
-				thinkingSelect.value = thinking;
+				const currentThinking = THINKING_LEVELS.includes(member?.thinking) ? member.thinking : "medium";
+				const draft = modelDraft && member && modelDraft.key === member.key ? modelDraft : null;
+				const desiredModel = draft ? draft.model : current;
+				const desiredThinking = draft ? draft.thinking : currentThinking;
+				// 运行中不允许切换模型：canStop 来自服务端真实 RunTarget，不是页面猜的状态。
+				const busy = Boolean(member?.control?.canStop);
+				if (modelPending) {
+					modelFeedback.dataset.state = "pending";
+					modelFeedback.textContent = "正在应用模型与思考程度…";
+				} else if (modelMessage) {
+					modelFeedback.dataset.state = modelMessage.state;
+					modelFeedback.textContent = modelMessage.text;
+				} else if (busy) {
+					modelFeedback.dataset.state = "idle";
+					modelFeedback.textContent = "成员运行中：先停止成员，再切换模型与思考程度。";
+				} else {
+					modelFeedback.dataset.state = "idle";
+					modelFeedback.textContent = "";
+				}
+				thinkingSelect.value = desiredThinking;
 				modelSelect.replaceChildren();
 				if (catalogue.length === 0) {
 					const option = document.createElement("option");
@@ -1451,11 +2297,11 @@
 					modelApply.disabled = true;
 					return;
 				}
-				const currentOption = catalogue.find((model) => `${model.provider}/${model.id}` === current);
+				const currentOption = catalogue.find((model) => `${model.provider}/${model.id}` === desiredModel);
 				if (!currentOption) {
 					const option = document.createElement("option");
-					option.value = current;
-					option.textContent = `${current}（当前）`;
+					option.value = desiredModel;
+					option.textContent = `${desiredModel}（当前）`;
 					modelSelect.append(option);
 				}
 				for (const model of catalogue) {
@@ -1465,10 +2311,66 @@
 					option.textContent = label;
 					modelSelect.append(option);
 				}
-				modelSelect.value = currentOption ? `${currentOption.provider}/${currentOption.id}` : current;
-				modelSelect.disabled = false;
-				thinkingSelect.disabled = false;
-				modelApply.disabled = false;
+				modelSelect.value = currentOption ? `${currentOption.provider}/${currentOption.id}` : desiredModel;
+				const changed = Boolean(member) && (modelSelect.value !== member.model || thinkingSelect.value !== member.thinking);
+				modelSelect.disabled = modelPending || busy;
+				thinkingSelect.disabled = modelPending || busy;
+				modelApply.disabled = modelPending || busy || !changed;
+			};
+
+			const rememberModelDraft = () => {
+				const member = selectedKey ? members.get(selectedKey) : null;
+				if (!member || modelPending) return;
+				modelDraft = { key: member.key, model: modelSelect.value, thinking: thinkingSelect.value };
+				modelMessage = null;
+				renderModelSwitcher(member);
+			};
+
+			const controlHint = (control) => {
+				if (control.canResume) return `可继续：${control.target || "上一目标"}（新 attempt，不重放已接受的提示）。`;
+				if (control.canStop) return `运行中：${control.target || "当前目标"}。停止会中断本轮，已写入的改动与子会话都会保留。`;
+				return "";
+			};
+
+			// 回执只描述“刚才那一下”：过期后回到实时能力提示，避免与最新状态互相矛盾。
+			const CONTROL_RECEIPT_MS = 8000;
+			const setControlMessage = (message) => {
+				controlMessage = message;
+				clearTimeout(controlMessageTimer);
+				const token = message;
+				controlMessageTimer = setTimeout(() => {
+					if (controlMessage !== token) return;
+					controlMessage = null;
+					render();
+				}, CONTROL_RECEIPT_MS);
+			};
+
+			const renderMemberControl = (member) => {
+				const control = member?.control || {};
+				const canStop = Boolean(control.canStop);
+				const canResume = Boolean(control.canResume);
+				memberStop.disabled = controlPending || !canStop;
+				memberResume.disabled = controlPending || !canResume;
+				// 没有可用动作时不摆两个灰按钮，避免把动作区和任务信息混在一起。
+				memberStop.hidden = !canStop;
+				memberResume.hidden = !canResume;
+				byId("member-control-row").hidden = !canStop && !canResume;
+				if (controlPending) {
+					controlFeedback.dataset.state = "pending";
+					controlFeedback.textContent = "正在提交操作…";
+					controlFeedback.hidden = false;
+					return;
+				}
+				if (controlMessage) {
+					controlFeedback.dataset.state = controlMessage.state;
+					controlFeedback.textContent = controlMessage.text;
+					controlFeedback.hidden = false;
+					return;
+				}
+				const hint = controlHint(control);
+				controlFeedback.dataset.state = "idle";
+				controlFeedback.textContent = hint;
+				controlFeedback.hidden = !hint;
 			};
 
 			const applyModelSwitch = async () => {
@@ -1476,60 +2378,136 @@
 				const model = modelSelect.value;
 				const thinking = thinkingSelect.value;
 				if (!member || !model || !THINKING_LEVELS.includes(thinking) || (model === member.model && thinking === member.thinking)) return;
-				modelFeedback.dataset.state = "pending";
-				modelFeedback.textContent = "正在应用模型与思考程度…";
-				modelApply.disabled = true;
-				modelSelect.disabled = true;
-				thinkingSelect.disabled = true;
+				modelPending = true;
+				modelMessage = null;
+				renderModelSwitcher(member);
 				try {
 					const response = await fetch("./model", {
 						method: "POST",
+						signal: AbortSignal.timeout(10000),
 						body: JSON.stringify({ team: member.team, id: member.id, model, thinking }),
 						cache: "no-store",
 						credentials: "omit",
 						headers: { "Content-Type": "application/json" },
 					});
 					const result = await response.json();
+					// 草稿在明确成功/失败后清空；服务端未确认时绝不假装已生效。
+					modelDraft = null;
 					if (result.ok) {
 						member.model = model;
 						member.thinking = thinking;
-						modelFeedback.dataset.state = "ok";
-						modelFeedback.textContent = result.text ? `已应用：${result.text}` : "已应用。";
+						modelMessage = { state: "ok", text: result.text ? `已应用：${result.text}` : "已应用。" };
 						announcer.textContent = `成员 ${member.id} 已应用模型 ${model} 与思考程度 ${thinking}`;
-						byId("tech-model").textContent = member.model;
-						byId("tech-thinking").textContent = member.thinking;
 					} else {
-						modelSelect.value = member.model;
-						thinkingSelect.value = member.thinking;
-						modelFeedback.dataset.state = "error";
-						modelFeedback.textContent = `应用失败：${result.error || "未知错误"}`;
+						modelMessage = { state: "error", text: `应用失败：${result.error || "未知错误"}` };
 						announcer.textContent = `成员 ${member.id} 模型与思考程度应用失败`;
 					}
 				} catch {
-					modelSelect.value = member.model;
-					thinkingSelect.value = member.thinking;
-					modelFeedback.dataset.state = "error";
-					modelFeedback.textContent = "应用失败：无法连接本地 Dashboard。";
+					modelDraft = null;
+					modelMessage = { state: "error", text: "应用失败：无法连接本地 Dashboard。" };
 				} finally {
-					modelApply.disabled = false;
-					modelSelect.disabled = false;
-					thinkingSelect.disabled = false;
+					modelPending = false;
+					render();
+				}
+			};
+
+			/**
+			 * 受控停/续：只提交 team/id/action，服务端自己解析真实目标并二次校验。
+			 * 停止是不可逆的软中断（会话与已写入改动保留），所以先确认。
+			 */
+			const requestMemberControl = async (action) => {
+				const member = selectedKey ? members.get(selectedKey) : null;
+				if (!member || controlPending) return;
+				if (action === "stop" && !window.confirm("停止会中断本轮运行：已写入的文件与子进程会话都会保留，可能需要你手动收尾部分改动。确定停止？")) return;
+				controlPending = true;
+				controlMessage = null;
+				clearTimeout(controlMessageTimer);
+				renderMemberControl(member);
+				const verb = action === "stop" ? "停止" : "继续";
+				try {
+					const response = await fetch("./control", {
+						method: "POST",
+						signal: AbortSignal.timeout(10000),
+						body: JSON.stringify({ team: member.team, id: member.id, action }),
+						cache: "no-store",
+						credentials: "omit",
+						headers: { "Content-Type": "application/json" },
+					});
+					const result = await response.json();
+					if (result.ok) {
+						setControlMessage({ state: "ok", text: result.text || `已${verb}。` });
+						announcer.textContent = `成员 ${member.id} 已${verb}`;
+					} else {
+						setControlMessage({ state: "error", text: `${verb}失败：${result.error || "未知错误"}` });
+						announcer.textContent = `成员 ${member.id} ${verb}失败`;
+					}
+				} catch {
+					setControlMessage({ state: "error", text: "操作失败：无法连接本地 Dashboard。" });
+				} finally {
+					controlPending = false;
+					render();
 				}
 			};
 
 			const renderSummary = () => {
 				const entries = [...members.values()];
-				const active = entries.filter((member) => ["running", "starting", "retry"].includes(statusKey(member.status))).length;
-				const turns = entries.reduce((total, member) => total + member.usage.turns, 0);
+				const active = entries.filter(memberIsActive).length;
 				byId("active-count").textContent = number.format(active);
-				byId("turn-count").textContent = number.format(turns);
 				byId("team-elapsed").textContent = elapsed(connectedAt);
 			};
 
+			// 主节点只来自真实主会话状态，不从成员忙闲或消息动画反推。
+			const applyLeaderState = (next) => {
+				leaderState = next && typeof next === "object" ? next : null;
+				if (collaborationGraph) collaborationGraph.setLeaderState(leaderState);
+			};
+
+			// 隐藏、断连或工作面板不补播输送。
+			const applyGraphVisibility = () => {
+				if (collaborationGraph) collaborationGraph.setVisible(currentView === "graph" && document.visibilityState !== "hidden");
+			};
+
+			const setView = (view) => {
+				currentView = view === "workbench" ? "workbench" : "graph";
+				document.body.dataset.view = currentView;
+				viewGraph.setAttribute("aria-pressed", String(currentView === "graph"));
+				viewWorkbench.setAttribute("aria-pressed", String(currentView === "workbench"));
+				applyGraphVisibility();
+				syncDetailScrollbar();
+			};
+
+			const closePanel = () => {
+				if (!panelOpen) return;
+				panelOpen = false;
+				render();
+				announcer.textContent = "已关闭成员详情。";
+				const returnFocus = panelReturnFocus;
+				panelReturnFocus = null;
+				requestAnimationFrame(() => {
+					if (returnFocus && typeof returnFocus.focus === "function" && document.contains(returnFocus)) returnFocus.focus({ preventScroll: true });
+				});
+			};
+
+			const openPanel = () => {
+				if (document.activeElement && typeof document.activeElement.focus === "function") panelReturnFocus = document.activeElement;
+				panelOpen = true;
+			};
+
+			// 事件密集时（流式 delta）合并到每帧一次渲染，避免一帧里反复全量重排。
+			const scheduleRender = () => {
+				if (renderQueued) return;
+				renderQueued = true;
+				requestAnimationFrame(() => { renderQueued = false; render(); });
+			};
 			const render = () => {
+				document.body.dataset.member = selectedKey ? "1" : "0";
+				document.body.dataset.panel = panelOpen && selectedKey ? "open" : "closed";
 				renderMembers();
 				renderSelected();
 				renderSummary();
+				// 稳定节点：流式事件不改变几何；运行中的成员优先获得图焦点，空闲后回到手选成员。
+				const focusKey = panelOpen ? (activeFocusKey() ?? selectedKey) : null;
+				if (collaborationGraph) collaborationGraph.update([...members.values()], focusKey);
 			};
 
 			const applyEvent = (member, event) => {
@@ -1567,6 +2545,10 @@
 						if (member.status !== event.status) addActivity(member, `状态 · ${statusLabel(event.status)}`, event.status);
 						member.status = event.status;
 						break;
+					case "progress":
+						// 只有阶段名与工具名，没有参数/结果/思考正文。
+						addActivity(member, event.label || "进行中", event.detail || "");
+						break;
 					case "error":
 						addActivity(member, "运行错误", event.message);
 						break;
@@ -1590,8 +2572,14 @@
 				}
 			};
 
+			const graphCommunication = (message) => ({
+				...message,
+				from: message.from === "@leader" ? "@leader" : `${message.team}\u0000${message.from}`,
+				to: message.to === "@leader" ? "@leader" : `${message.team}\u0000${message.to}`,
+			});
+
 			source.addEventListener("open", () => {
-				setConnection("live", "实时连接");
+				applyConnection();
 				void heartbeat();
 			});
 
@@ -1600,7 +2588,34 @@
 				try { payload = JSON.parse(message.data); } catch { return; }
 				if (payload.kind === "bootstrap" || payload.kind === "members") {
 					if (Array.isArray(payload.models)) models = payload.models;
-					mergeMembers(payload.members);
+					// 只有 bootstrap 采用服务端镜像（刷新/重连恢复）；增量成员消息不能覆盖更新的流式文本。
+					mergeMembers(payload.members, payload.kind === "bootstrap");
+					// 重连快照以最新主会话状态为准；快照缺失该字段就回到未获取，不保留旧值、不假报空闲。
+					if (payload.kind === "bootstrap") {
+						applyLeaderState(payload.leaderState);
+						if (collaborationGraph) collaborationGraph.restoreCommunications((payload.communications || []).map(graphCommunication));
+					}
+					return;
+				}
+				if (payload.kind === "leader_state") {
+					applyLeaderState(payload.state);
+					return;
+				}
+				if (payload.kind === "communications") {
+					if (collaborationGraph) {
+						collaborationGraph.removeCommunications(payload.removed);
+						const live = new Set(payload.liveIds || []);
+						for (const entry of payload.messages || []) collaborationGraph.communication(graphCommunication(entry), live.has(entry.id));
+					}
+					return;
+				}
+				if (payload.kind === "communication_phase") {
+					const member = members.get(payload.memberKey);
+					if (member) {
+						member.communication = payload.phase;
+						if (!payload.phase.active) member.status = payload.phase.status;
+						scheduleRender();
+					}
 					return;
 				}
 				if (payload.kind === "models") {
@@ -1611,22 +2626,38 @@
 				if (payload.kind === "event") {
 					const member = members.get(payload.memberKey);
 					if (!member || !payload.event) return;
-					applyEvent(member, payload.event);
-					render();
+					try { applyEvent(member, payload.event); } catch { /* 单帧异常不打断后续事件 */ }
+					scheduleRender();
 					return;
 				}
 				if (payload.kind === "remove") {
+					const removedSelected = selectedKey === payload.memberKey;
 					members.delete(payload.memberKey);
-					if (selectedKey === payload.memberKey) selectedKey = members.keys().next().value || null;
+					if (removedSelected) {
+						// 被移除的正是当前查看的成员（kill / 收尾清理）：连同详情一起关掉，
+						// 不要悄悄跳到另一位成员，让人误以为还在看原来那个人。
+						selectedKey = null;
+						panelOpen = false;
+						panelReturnFocus = null;
+					} else if (!selectedKey || !members.has(selectedKey)) {
+						selectedKey = members.keys().next().value || null;
+					}
 					render();
+					if (removedSelected && !panelOpen) announcer.textContent = "成员已结束，详情已关闭。";
 					return;
 				}
-				if (payload.kind === "shutdown") finish("ended", "Dashboard 已结束");
+				if (payload.kind === "shutdown") {
+					finish("ended", "Dashboard 已结束");
+					// 收尾后尝试自关；只有脚本打开的标签允许关，浏览器拦下时保留
+					// 「已结束」页与关闭提示，不谎称已关闭。
+					try {
+						window.close();
+					} catch { /* 浏览器拒绝关闭属预期，页面保留“已结束” */ }
+				}
 			});
 
 			source.addEventListener("error", () => {
-				if (ended) return;
-				setConnection("connecting", "正在重连");
+				applyConnection();
 			});
 
 			async function heartbeat() {
@@ -1640,10 +2671,8 @@
 						keepalive: true,
 						headers: { "Content-Type": "text/plain;charset=UTF-8" },
 					});
-					setConnection("live", "实时连接");
-				} catch {
-					setConnection("connecting", "正在重连");
-				}
+				} catch { /* 失败同样只由 applyConnection 依据真实 SSE 状态判定 */ }
+				applyConnection();
 			}
 
 			function reportHidden(reason) {
@@ -1659,18 +2688,68 @@
 				clearInterval(heartbeatTimer);
 				clearInterval(summaryTimer);
 				setConnection(state, label);
+				if (collaborationGraph) collaborationGraph.setVisible(false);
 				byId("ended-banner").hidden = false;
 				announcer.textContent = `${label}。可以关闭此页。`;
 			}
 
 			document.addEventListener("visibilitychange", () => {
+				applyGraphVisibility();
 				if (document.visibilityState === "visible") void heartbeat();
 				else reportHidden("hidden");
 			});
-			window.addEventListener("pagehide", () => reportHidden("pagehide"), { once: true });
+			window.addEventListener("pagehide", () => {
+				reportHidden("pagehide");
+				if (collaborationGraph) collaborationGraph.destroy();
+				detailScrollbarObserver?.disconnect();
+			}, { once: true });
+			viewGraph.addEventListener("click", () => setView("graph"));
+			viewWorkbench.addEventListener("click", () => setView("workbench"));
+			window.addEventListener("resize", syncDetailScrollbar, { passive: true });
+			document.addEventListener("scroll", syncDetailScrollbar, { passive: true, capture: true });
+			panelPanes.addEventListener("scroll", syncDetailScrollbar, { passive: true });
+			const detailScrollbarObserver = typeof ResizeObserver === "function" ? new ResizeObserver(syncDetailScrollbar) : null;
+			if (detailScrollbarObserver) {
+				detailScrollbarObserver.observe(panelPanes);
+				for (const element of panelPanes.children) detailScrollbarObserver.observe(element);
+			}
+			panelTabs.addEventListener("click", (event) => {
+				const tab = event.target.closest("[data-pane]");
+				if (tab) selectPane(tab.dataset.pane);
+			});
+			panelTabs.addEventListener("keydown", (event) => {
+				if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+				const step = event.key === "ArrowRight" ? 1 : -1;
+				const next = PANES[(PANES.indexOf(activePane) + step + PANES.length) % PANES.length];
+				event.preventDefault();
+				selectPane(next);
+				byId(`tab-${next}`).focus();
+			});
+			panelClose.addEventListener("click", closePanel);
+			document.addEventListener("keydown", (event) => {
+				if (event.key !== "Escape" || currentView !== "graph" || !panelOpen) return;
+				event.preventDefault();
+				closePanel();
+			});
 			modelApply.addEventListener("click", () => void applyModelSwitch());
+			modelSelect.addEventListener("change", rememberModelDraft);
+			thinkingSelect.addEventListener("change", rememberModelDraft);
+			memberStop.addEventListener("click", () => void requestMemberControl("stop"));
+			memberResume.addEventListener("click", () => void requestMemberControl("resume"));
 			heartbeatTimer = setInterval(() => void heartbeat(), 1000);
 			summaryTimer = setInterval(renderSummary, 1000);
+			if (window.CollaborationGraph && graphRoot) {
+				collaborationGraph = window.CollaborationGraph.create(graphRoot, {
+					nonce: scriptNonce,
+					onSelect: (key) => {
+						openPanel();
+						selectMember(key, true);
+					},
+				});
+				collaborationGraph.setLeaderState(leaderState);
+				collaborationGraph.setConnected(false);
+			}
+			setView("graph");
 			render();
 		})();
 	</script>

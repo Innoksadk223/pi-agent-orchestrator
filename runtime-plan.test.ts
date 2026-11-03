@@ -12,6 +12,8 @@ import {
 	parseReportEnvelope,
 	planConfirmation,
 	resolveTaskCancellation,
+	runnableBatches,
+	type TeamRecord,
 	STATE_SCHEMA_VERSION,
 	type TeamState,
 	validateToolRequest,
@@ -127,7 +129,31 @@ test("plan confirmation for initial registration renders the full view", () => {
 	assert.match(text, /## Roster \(1\)/u);
 	assert.match(text, /## Execution DAG \(1 tasks\)/u);
 	assert.match(text, /## Global acceptance \(1\)/u);
+	// 门只在自动授权关闭时出现，所以正文必须说清楚这件事和跳过方式。
+	assert.match(text, /\*\*Automatic authorization:\*\* OFF/u);
+	assert.match(text, /set-auto \{auto:true\} before plan/u);
 	assert.doesNotMatch(text, /Changes vs approved/u);
+});
+
+test("runnable batches group parallel-safe tasks and queue the rest with a reason", () => {
+	const task = (id: string, memberId: string, paths: string[], status = "READY") => ({ id, memberId, status, dependsOn: [], packet: { ownedPaths: paths } });
+	const team = {
+		plan: { memberKinds: { a: "coder", b: "coder", rev: "reviewer" } },
+		members: { a: { status: "IDLE" }, b: { status: "IDLE" }, rev: { status: "IDLE" } },
+		executionTasks: {
+			t1: task("t1", "a", ["src/a"]),
+			t2: task("t2", "b", ["src/b"]),
+			t3: task("t3", "b", ["docs"]),
+			t4: task("t4", "a", ["src/a/deep"]),
+			t5: task("t5", "rev", ["reports"]),
+		},
+	} as unknown as TeamRecord;
+	const { batches, queued } = runnableBatches(team);
+	assert.deepEqual(batches[0], ["t1", "t2"], "成员互异且路径不冲突的任务合成一批并行");
+	assert.deepEqual(batches[1], ["t3", "t4"], "同一成员的第二件事排到下一批");
+	assert.equal(queued.find((item) => item.id === "t5")?.reason, "rev is not a coder");
+	team.members.a.status = "RUNNING";
+	assert.equal(runnableBatches(team).queued.find((item) => item.id === "t1")?.reason, "a is busy");
 });
 
 function memberState(id: string, instructions: string): import("./runtime.ts").MemberState {
@@ -277,18 +303,27 @@ test("steer validates member id and message and forbids cross-action control fie
 	);
 });
 
-test("pause and resume share the task contract; only pause forbids background", () => {
+test("pause keeps the single-task contract while resume selects exactly one existing target", () => {
 	const unplanned: TeamState = { schemaVersion: STATE_SCHEMA_VERSION, teams: {}, updatedAt: "t" };
 	assert.throws(() => validateToolRequest({ action: "pause", taskId: "a" }, unplanned), /pause requires a registered plan/u);
 	assert.throws(() => validateToolRequest({ action: "resume", taskId: "a" }, unplanned), /resume requires a registered plan/u);
 	assert.throws(() => validateToolRequest({ action: "pause" }, stateWithPlan()), /pause requires taskId/u);
-	assert.throws(() => validateToolRequest({ action: "resume" }, stateWithPlan()), /resume requires taskId/u);
+	assert.throws(
+		() => validateToolRequest({ action: "resume" }, stateWithPlan()),
+		/resume requires exactly one of taskId, reviewRoundId, or expertRoundId/u,
+	);
+	assert.throws(
+		() => validateToolRequest({ action: "resume", taskId: "a", reviewRoundId: "r" }, stateWithPlan()),
+		/resume requires exactly one of taskId, reviewRoundId, or expertRoundId/u,
+	);
 	assert.throws(
 		() => validateToolRequest({ action: "pause", taskId: "a", background: true }, stateWithPlan()),
 		/pause forbids background/u,
 	);
-	// resume keeps run's explicit dispatch semantics: background is allowed.
+	// resume keeps run's explicit dispatch semantics: background is allowed on all three selectors.
 	validateToolRequest({ action: "resume", taskId: "a", background: false }, stateWithPlan());
+	validateToolRequest({ action: "resume", reviewRoundId: "r", background: true }, stateWithPlan());
+	validateToolRequest({ action: "resume", expertRoundId: "e", background: true }, stateWithPlan());
 	assert.throws(
 		() => validateToolRequest({ action: "pause", taskId: "a", requestId: "r" }, stateWithPlan()),
 		/pause forbids .*requestId/u,

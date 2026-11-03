@@ -85,18 +85,30 @@ const Plan = Type.Object(
 export const AgentTeamParams = Type.Object(
 	{
 		action: StringEnum([
-			"plan", "run", "parallel", "review", "expert", "wait", "status", "stop", "kill", "cancel",
-			"set-model", "set-auto", "steer", "pause", "resume", "answer-request", "resolve-request",
+			"plan", "run", "parallel", "review", "expert", "consult", "wait", "status", "stop", "kill", "cancel",
+			"close", "set-model", "set-auto", "steer", "pause", "resume", "answer-request", "resolve-request",
 		] as const),
 		team: Type.Optional(Id),
 		member: Type.Optional(Member),
 		plan: Type.Optional(Plan),
 		expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 		validateOnly: Type.Optional(Type.Boolean()),
-		taskId: Type.Optional(Id),
+		taskId: Type.Optional({
+			...Id,
+			description:
+				"run/pause: the execution task. resume: one of taskId/reviewRoundId/expertRoundId must be given to start the next attempt on that same target.",
+		}),
 		taskIds: Type.Optional(Type.Array(Id, { minItems: 1, maxItems: MAX_PARALLEL_TASKS, uniqueItems: true })),
-		reviewRoundId: Type.Optional(Id),
-		expertRoundId: Type.Optional(Id),
+		reviewRoundId: Type.Optional({
+			...Id,
+			description:
+				"review: the new round id. resume: re-runs that existing BLOCKED round as a new attempt, reusing its reviewer and original targets.",
+		}),
+		expertRoundId: Type.Optional({
+			...Id,
+			description:
+				"expert: the new round id. consult: optional round id for the read-only consult round; the runtime generates consult-N when omitted. resume: re-runs that existing BLOCKED round as a new attempt, reusing its expert/consulted member, objective, and original targets.",
+		}),
 		expertId: Type.Optional(Id),
 		objective: Type.Optional(Prompt),
 		full: Type.Optional(Type.Boolean()),

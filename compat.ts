@@ -3,8 +3,25 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as PiCore from "@earendil-works/pi-coding-agent";
+import {
+	PEER_MARKER_ENV,
+	PEER_TOKEN_ENV,
+	PEER_TOOL_NAME,
+	PEER_URL_ENV,
+} from "./peer-protocol.ts";
+import { loadMemberCapabilities, type CapabilityLoadOptions, type MemberCapabilities } from "./member-capabilities.ts";
+
+/**
+ * 身份块里唯一一句运行时边界，也是稳定段的一部分（可进缓存前缀）：
+ * 信封与验收由每次派发给出，成员不得自己派工、不得使用 agent_team。
+ * 这句话只能出现在这里——派发提示词不再重复，测试按字面计数锁死。
+ */
+export const MEMBER_IDENTITY_RULE =
+	"The dispatch and its TaskPacket carry the report envelope and acceptance; the leader alone dispatches work and members never use agent_team.";
 
 export const MIN_PI_VERSION = "0.82.1";
+// -e builtin:<name> and --no-extensions covering built-in extensions landed in 0.99.0.
+const BUILTIN_EXTENSION_MIN_VERSION = "0.99.0";
 export const TESTED_PI_MINOR = "0.82";
 
 export interface RpcStats {
@@ -67,6 +84,17 @@ export interface ClientOptions {
 	args?: string[];
 }
 
+/**
+ * 成员互通通道：父进程本机入口 + 该成员专属临时令牌 + 成员扩展的绝对路径。
+ * 由 runtime 在启动 child 前签发；没有通道时成员照常工作，只是没有 team_message。
+ */
+export interface MemberPeerChannel {
+	url: string;
+	token: string;
+	extension: string;
+	marker: string;
+}
+
 export interface PersistentMemberOptions {
 	team: string;
 	id: string;
@@ -80,6 +108,9 @@ export interface PersistentMemberOptions {
 	tools: string[];
 	cwd: string;
 	trusted: boolean;
+	// 只有 coder 角色默认拿到 MCP；只读角色要显式列 mcp__* 才开，避免静默扩权。
+	allowMcpTools?: boolean;
+	peer?: MemberPeerChannel;
 }
 
 export interface MemberClientHandle {
@@ -117,6 +148,8 @@ export interface AdapterOverrides {
 	cliPath?: string;
 	// session existence probe override (defaults to the real SessionManager.list)
 	listSessions?: ((cwd: string) => Promise<Array<{ id: string }>>) | null;
+	// member capability discovery; tests point agentDir at a temporary directory
+	capabilityOptions?: CapabilityLoadOptions;
 }
 
 function parseVersion(value: string): [number, number, number] | undefined {
@@ -156,6 +189,7 @@ export class PiCompatibilityAdapter {
 	private readonly factory: RpcClientFactory | undefined;
 	private readonly fixedCliPath: string | undefined;
 	private readonly listSessions: ((cwd: string) => Promise<Array<{ id: string }>>) | undefined;
+	private readonly capabilityOptions: CapabilityLoadOptions;
 	private cachedCliPath: string | undefined;
 	private doctorPassedForVersion: string | undefined;
 
@@ -170,6 +204,32 @@ export class PiCompatibilityAdapter {
 		this.fixedCliPath = overrides.cliPath;
 		this.listSessions =
 			overrides.listSessions === null ? undefined : (overrides.listSessions ?? defaultListSessions());
+		this.capabilityOptions = overrides.capabilityOptions ?? {};
+	}
+
+	/**
+	 * 成员能力：本地插件按白名单显式加载，MCP 全开。配置/目录问题只进 diagnostics，
+	 * 任何失败都退化为「不带额外能力」，绝不阻塞成员启动。
+	 */
+	private async memberCapabilities(): Promise<MemberCapabilities> {
+		try {
+			const capabilities = await loadMemberCapabilities(this.capabilityOptions);
+			if (capabilities.mcp && !this.supportsBuiltinExtensions()) {
+				capabilities.mcp = false;
+				capabilities.diagnostics.push(
+					`builtin:mcp requires Pi >= ${BUILTIN_EXTENSION_MIN_VERSION} (running ${this.version ?? "unknown"}); skipped`,
+				);
+			}
+			return capabilities;
+		} catch (error) {
+			return { mcp: false, extensions: [], diagnostics: [String(error)] };
+		}
+	}
+
+	private supportsBuiltinExtensions(): boolean {
+		if (!this.version) return false;
+		const comparison = compareVersions(this.version, BUILTIN_EXTENSION_MIN_VERSION);
+		return !Number.isNaN(comparison) && comparison >= 0;
 	}
 
 	async resolveCliPath(): Promise<string> {
@@ -332,9 +392,7 @@ export class PiCompatibilityAdapter {
 			"Fixed instructions:",
 			member.instructions,
 			"",
-			"Follow only the current runtime dispatch and its local TaskPacket or review/expert targets.",
-			"Do not consult legacy team files, other members, the parent roster, global plan, or parent conversation history.",
-			"Do not create or coordinate agents and do not use agent_team; the leader alone dispatches work.",
+			MEMBER_IDENTITY_RULE,
 		].filter((line): line is string => Boolean(line)).join("\n");
 		await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
 		const cleanupPrompt = async () => {
@@ -350,15 +408,42 @@ export class PiCompatibilityAdapter {
 			// next to the prompt input). On first launch pi assigns the id; the runtime
 			// adopts the reported id (see ensureClient) so later runs resume that session.
 			const args = [...(restored ? ["--session-id", member.sessionId] : []), "--thinking", member.thinking];
-			if (member.tools.length > 0) args.push("--tools", member.tools.join(","));
-			// S2-10: isolate the child from the user's other extensions and skills
-			// (e.g. pi-model-cycler could silently change the member's model or
-			// behavior); the member prompt is fully carried by --append-system-prompt.
-			args.push("--no-extensions", "--no-skills", member.trusted ? "--approve" : "--no-approve", "--append-system-prompt", promptPath);
+			const capabilities = await this.memberCapabilities();
+			// 显式工具白名单在启动时追加互通工具:不改持久化的角色书/工具配置(configHash 不变),
+			// 也不扩大成员原有授权(team_message 不是写工具)。
+			if (member.tools.length > 0) {
+				const tools = member.peer ? [...new Set([...member.tools, PEER_TOOL_NAME])] : [...member.tools];
+				// 传了 --tools 时 Pi 只声明匹配条目的 MCP 工具；不给 mcp__* 通配，direct
+				// 暴露的工具会留在注册表里但成员拿不到，MCP 等于白开。
+				const wantsMcp = tools.some((tool) => tool.startsWith("mcp__"));
+				if (capabilities.mcp && member.allowMcpTools === true && !wantsMcp) tools.push("mcp__*");
+				args.push("--tools", tools.join(","));
+			}
+			// S2-10: isolate the child from the user's other extensions (e.g. pi-model-cycler
+			// could silently change the member's model or behaviour); skills stay discoverable so
+			// members can use the same reusable procedures as the main agent. The member prompt is
+			// carried by --append-system-prompt.
+			args.push("--no-extensions", member.trusted ? "--approve" : "--no-approve", "--append-system-prompt", promptPath);
+			// 显式 -e 是 --no-extensions 下唯一放行路径：本地插件按白名单自动发现，
+			// builtin:mcp 让成员读取 mcp.json 的全部 server，npm 包与危险扩展仍被隔离。
+			for (const extension of capabilities.extensions) args.push("--extension", extension);
+			if (capabilities.mcp) args.push("--extension", "builtin:mcp");
+			// 互通只加载这一个显式扩展：--no-extensions 仍然隔离用户与项目扩展，
+			// 显式 -e 路径是 Pi 文档保证的例外。
+			if (member.peer) args.push("--extension", member.peer.extension);
 			const rawClient = this.factory({
 				cliPath,
 				cwd: member.cwd,
-				env: { PI_AGENT_TEAM_MEMBER: "1" },
+				env: {
+					PI_AGENT_TEAM_MEMBER: "1",
+					...(member.peer
+						? {
+								[PEER_URL_ENV]: member.peer.url,
+								[PEER_TOKEN_ENV]: member.peer.token,
+								[PEER_MARKER_ENV]: member.peer.marker,
+							}
+						: {}),
+				},
 				provider: member.model.provider,
 				model: member.model.id,
 				args,
