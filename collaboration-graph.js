@@ -10,6 +10,13 @@
 	var CARD_H = 96, CARD_GAP = 128, LEADER_H = 146;
 	/* 并行：共享主干上的车道（最多 5 条，间距 7px）与统一涌动周期 1450ms。 */
 	var LANE_COUNT = 5, LANE_GAP = 7, FLOW_MS = 1450;
+	/* 自适应：画布宽跟着容器走，缩放退居保底——只有画布宽被下限顶住、比容器还宽时才等比缩小；
+	 * 0.75 是可读下限，再窄就让它横向滚动。 */
+	var FIT_FLOOR = 0.75, FIT_MAX = 1, FIT_STEPS = 1000;
+	/* 画布宽：非紧凑 clamp(容器内容宽, 640, 980)，紧凑 clamp(容器内容宽, 560, 820)。
+	 * 紧凑下限 560 = 主卡 196 + 成员卡 168 的硬下限排得开的宽；再窄就整张图缩放，
+	 * 缩放到底（0.75）还放不下才横向滚动。宽度未知（未挂载）时取上限，保持原样。 */
+	var CANVAS_MIN = 640, CANVAS_MAX = 980, COMPACT_MIN = 560, COMPACT_MAX = 820;
 	var ACTIVE = { STARTING: 1, RUNNING: 1, TOOL: 1, RETRY: 1 };
 	/* 停止的席位默认不画在图上：它已不可继续执行，留着只是一排死卡。
 	 * 重新派发会先进入 STARTING/RUNNING，于是自动重新出现。 */
@@ -25,6 +32,9 @@
 .cg-root * { box-sizing:border-box; }
 .cg-scroll { overflow:auto; overscroll-behavior:contain; height:100%; min-height:350px; max-height:76svh; scrollbar-color:var(--cg-rule) transparent; }
 .cg-canvas { position:relative; margin-inline:auto; isolation:isolate; }
+/* 适配层：canvas 用 transform 缩放，布局尺寸仍是原图；外层 frame 必须显式收成缩放后的宽高，
+ * 否则滚动区按原尺寸计算，内容缩了、下面却留一大片空白。 */
+.cg-frame { position:relative; margin-inline:auto; overflow:hidden; }
 .cg-lines { position:absolute; inset:0; z-index:0; overflow:visible; pointer-events:none; }
 .cg-node { position:absolute; z-index:2; display:flex; flex-direction:column; border:1px solid rgb(255 255 255 / .66); border-radius:8px; background:var(--cg-paper); -webkit-backdrop-filter:blur(18px) saturate(1.3); backdrop-filter:blur(18px) saturate(1.3); padding:12px 14px 12px 17px; color:var(--cg-ink); text-align:left; font:inherit; min-width:0; transition:border-color 140ms, background 140ms; }
 button.cg-node { cursor:pointer; }
@@ -37,6 +47,9 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 .cg-node[data-state="ERROR"] .cg-rail { background:var(--cg-rail-error); }
 .cg-node[data-state="SETTLED"] .cg-rail { background:var(--cg-rail-settled); }
 .cg-heading { display:flex; align-items:baseline; justify-content:space-between; gap:10px; min-width:0; }
+/* 卡片高度是固定值时，overflow:hidden 的文本行会被 flex 压成几像素高；行一律不许缩，
+ * 装不下就把卡片加高（layout 里按 scrollHeight 量），而不是把字挤扁。 */
+.cg-heading,.cg-role,.cg-stats,.cg-action { flex-shrink:0; }
 .cg-name { font-size:15px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cg-role { color:var(--cg-soft); font-size:12px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cg-badge { flex-shrink:0; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--cg-soft); white-space:nowrap; }
@@ -47,12 +60,14 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 .cg-action { margin-top:auto; padding-top:8px; border-top:1px solid var(--cg-rule); font-size:12px; color:var(--cg-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cg-node[aria-pressed="true"] { border-color:var(--cg-blue); background:rgb(255 255 255 / .7); }
 .cg-node[data-leader="true"] { padding:16px 18px; border-color:rgb(255 255 255 / .24); color:#fff; background:linear-gradient(165deg,rgb(22 80 60 / .97) 0%,rgb(13 58 43 / .97) 100%); }
+/* 窄画布里名字（88px）不该被 33px 的状态徽标挤成省略号：让徽标换到下一行。 */
+.cg-node[data-leader="true"] .cg-heading { flex-wrap:wrap; }
 .cg-node[data-leader="true"] .cg-name { font-size:19px; color:#fff; }
 .cg-node[data-leader="true"] .cg-role { color:rgb(255 255 255 / .72); margin-top:4px; }
 .cg-node[data-leader="true"] .cg-badge { color:rgb(255 255 255 / .84); }
 .cg-node[data-leader="true"] .cg-action { color:rgb(255 255 255 / .88); border-top-color:rgb(255 255 255 / .2); }
-.cg-stats { display:flex; gap:14px; margin-top:10px; font-family:var(--font-mono,ui-monospace); font-size:11px; color:rgb(255 255 255 / .72); }
-.cg-stat { display:flex; gap:4px; align-items:baseline; }
+.cg-stats { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-family:var(--font-mono,ui-monospace); font-size:11px; color:rgb(255 255 255 / .72); }
+.cg-stat { display:flex; flex:0 0 auto; gap:4px; align-items:baseline; white-space:nowrap; }
 .cg-stat b { font-weight:650; font-size:13px; color:#fff; font-variant-numeric:tabular-nums; }
 .cg-team { position:absolute; font-size:12px; font-weight:650; color:var(--cg-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* 归属线：填充丝带（源头宽、末端窄），不用描边，避免与关系线抢质地。 */
@@ -142,6 +157,48 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		return d + " Z";
 	}
 
+	/* 纯函数：输入容器宽与未缩放的图宽，输出 clamp(容器宽 / 图宽, 0.75, 1)，无副作用。
+	 * 比值向下取到三位小数：亚像素没看得出的差别，却会让「图宽×k」堪堪越过容器，
+	 * 白白多出一条横向滚动条；向下取整则保证永远不超。画布宽随容器收窄后，只有画布被
+	 * 下限顶住（容器比 560/640 还窄）时才会小于 1。 */
+	function fitScale(containerWidth, canvasWidth) {
+		var box = Number(containerWidth), canvas = Number(canvasWidth);
+		if (!(box > 0) || !(canvas > 0)) return FIT_MAX;
+		var exact = Math.floor((box / canvas) * FIT_STEPS) / FIT_STEPS;
+		return Math.min(FIT_MAX, Math.max(FIT_FLOOR, exact));
+	}
+
+	/* 纯函数：容器内容宽 → 画布宽。宽度跟着容器走，所以半屏时不需要靠缩放去「塞」。
+	 * 宽度未知（0/NaN）时给上限：未挂载的图先按原尺寸排，挂载后由 ResizeObserver 重算。 */
+	function canvasWidth(containerWidth, compact) {
+		var box = Number(containerWidth), min = compact ? COMPACT_MIN : CANVAS_MIN, max = compact ? COMPACT_MAX : CANVAS_MAX;
+		if (!(box > 0) || !isFinite(box)) return max;
+		return Math.min(max, Math.max(min, Math.floor(box)));
+	}
+
+	/* 纯函数：画布宽 → 各列坐标。参考原图 980 宽下的 主卡 28/236、主干 340、成员列 420/278，
+	 * 以及紧凑 820 宽下的 主卡 28/196、主干 240、成员列 320/250：先按画布宽等比分配，
+	 * 再把两个下限当硬约束套上去：主卡 ≥196（「主 Agent」+ 三个计数一行排得下的实测宽），
+	 * 成员卡 ≥168（名字 + 状态徽标 + 两侧内边距）。画布 ≥560 时任何百分比都不能把它们算小，
+	 * 挤不下就先收窄带宽、把成员列左移，而不是缩卡片。
+	 * 不变式：leaderRight < memberX，memberRight = memberX + memberW ≤ width - 12。 */
+	function graphMetrics(width, compact) {
+		var w = Number(width) > 0 ? Math.round(Number(width)) : (compact ? COMPACT_MAX : CANVAS_MAX);
+		var base = compact ? COMPACT_MAX : CANVAS_MAX;
+		var padL = Math.max(12, Math.round(w * 28 / base));
+		var leadMax = compact ? 196 : 236, leadFloor = 196;
+		var leaderW = Math.min(leadMax, Math.max(leadFloor, Math.round(w * leadMax / base)));
+		/* 两列之间的带宽是标签的家：紧凑布局留 64px，挤不下时先牺牲它（最低 16px）。 */
+		var gap = compact ? Math.min(64, Math.max(16, Math.round(w * 0.075))) : 40;
+		var memberX = Math.max(Math.round(w * (compact ? 320 : 420) / base), padL + leaderW + gap);
+		var memberW = Math.max(168, Math.round(w * (compact ? 250 : 278) / base));
+		/* 硬下限不让步：放不下就把成员列整体左移，最后才由画布宽的下限（560/640）兑底。 */
+		if (memberX + memberW > w - 12) memberX = Math.max(padL + leaderW + 16, w - 12 - memberW);
+		var lowTrunk = padL + leaderW + 16, highTrunk = memberX - 12, target = memberX - Math.round(w * 80 / base);
+		var trunk = highTrunk <= lowTrunk ? highTrunk : Math.min(highTrunk, Math.max(lowTrunk, target));
+		return { width: w, leaderX: padL, leaderW: leaderW, leaderRight: padL + leaderW, memberX: memberX, memberW: memberW, memberRight: memberX + memberW, trunk: trunk };
+	}
+
 	function create(root, options) {
 		if (!root || typeof root.appendChild !== "function") throw new TypeError("CollaborationGraph.create 需要根节点");
 		var opts = options || {}, doc = root.ownerDocument || global.document;
@@ -149,14 +206,14 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		var timeout = opts.setTimer || global.setTimeout.bind(global), cancelTimeout = opts.clearTimer || global.clearTimeout.bind(global);
 		var nodes = new Map(), messages = new Map(), edges = new Map(), seen = new Set(), bursts = new Map();
 		var selected = null, visible = true, connected = true, destroyed = false, expiry = null;
-		var leader = { status: "UNKNOWN", tools: [] }, layoutKey = "", geometry = null, statsKey = "";
+		var leader = { status: "UNKNOWN", tools: [] }, layoutKey = "", geometry = null, statsKey = "", fit = { scale: 1, width: 0, height: 0 };
 		var lanes = new Map(), laneSig = "", hiddenCount = 0, hiddenTeams = new Map();
 		var mql = typeof global.matchMedia === "function" ? global.matchMedia("(prefers-reduced-motion: reduce)") : null;
 		var motion = opts.reducedMotion === undefined ? !(mql && mql.matches) : !opts.reducedMotion;
 
 		function el(tag, cls, content) { var n = doc.createElement(tag); if (cls) n.className = cls; if (content != null) n.textContent = content; return n; }
 		function svg(tag, cls) { var n = doc.createElementNS(SVG, tag); if (cls) n.setAttribute("class", cls); return n; }
-		var shell = el("section", "cg-root"), style = el("style"), scroll = el("div", "cg-scroll"), canvas = el("div", "cg-canvas"), lines = svg("svg", "cg-lines");
+		var shell = el("section", "cg-root"), style = el("style"), scroll = el("div", "cg-scroll"), frame = el("div", "cg-frame"), canvas = el("div", "cg-canvas"), lines = svg("svg", "cg-lines");
 		/* 五层固定分组：静态归属线 → 常驻涌动 → 通信关系 → 投递脉冲 → 箭头。DOM 顺序即绘制顺序。 */
 		var gBases = svg("g", "cg-layer"), gFlows = svg("g", "cg-layer"), gEdges = svg("g", "cg-layer"), gBursts = svg("g", "cg-layer"), gHeads = svg("g", "cg-layer");
 		[gBases, gFlows, gEdges, gBursts, gHeads].forEach(function (g) { lines.appendChild(g); });
@@ -166,7 +223,7 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		shell.setAttribute("aria-label", "Agent 协作图");
 		scroll.setAttribute("tabindex", "0"); scroll.setAttribute("aria-label", "协作图画布，可上下左右滚动");
 		lines.setAttribute("aria-hidden", "true");
-		canvas.appendChild(lines); scroll.appendChild(canvas); shell.appendChild(style); shell.appendChild(scroll);
+		canvas.appendChild(lines); frame.appendChild(canvas); scroll.appendChild(frame); shell.appendChild(style); shell.appendChild(scroll);
 		var legend = el("div", "cg-legend"), offline = el("span", "cg-offline"), hiddenNote = el("span", "cg-hidden");
 		[['cg-legend-base', "归属"], ["cg-legend-flow", "活动"], ["cg-legend-message", "真实通信"], ["cg-legend-queued", "排队"], ["cg-legend-failed", "失败"]].forEach(function (item) { var span = el("span"); span.appendChild(el("i", item[0])); span.appendChild(el("span", "", item[1])); legend.appendChild(span); });
 		legend.appendChild(hiddenNote); legend.appendChild(offline); shell.appendChild(legend); root.appendChild(shell);
@@ -241,13 +298,47 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			renderStats();
 		}
 		function setBox(n, x, y, width, height) { n.box = { x: x, y: y, width: width, height: height }; Object.assign(n.element.style, { left: x + "px", top: y + "px", width: width + "px", height: height + "px" }); }
+		/* 内容高：scrollHeight 含内边距但不含边框，而 setBox 写的是 border-box 高，补回 2px；
+		 * 量不到（未挂载、假 DOM）时退回给定高度，不会凭空长高。 */
+		function contentHeight(element, fallback) {
+			var value = Math.ceil(Number(element.scrollHeight) || 0);
+			return value > 0 ? value + 2 : fallback;
+		}
+		/* 主卡内容（名字、角色、三项计数、动作）在窄画布里会换成多行：内容超过已有高度时
+		 * 要重排一次把卡片长高，否则那几行只能靠压缩自己挤进固定高度。 */
+		function leaderOverflow() {
+			return !!main.box && contentHeight(main.element, LEADER_H) > main.box.height + 0.5;
+		}
+		/* 量的是滚动区的内容宽：root 上那 1px 边框不算画布空间，拿 root.clientWidth 当图宽会让
+		 * 缩放后仍差出 2px，平白留一条横向滚动条；未挂载（宽 0）时回退到 root。 */
+		function viewportWidth() { return scroll.clientWidth || root.clientWidth || 0; }
+		/* 缩放只作用在同时装着节点与线条的 canvas 上（origin 左上），节点、线条、标签都还在
+		 * 未缩放的坐标系里布点；transform 不改布局，所以 frame 要显式拿到缩放后的宽高。 */
+		function applyFit() {
+			if (!geometry) return;
+			var scale = fitScale(viewportWidth(), geometry.width);
+			var width = geometry.width * scale, height = geometry.height * scale;
+			if (scale === fit.scale && width === fit.width && height === fit.height) return;
+			fit = { scale: scale, width: width, height: height };
+			canvas.style.transformOrigin = "0 0";
+			canvas.style.transform = "scale(" + scale + ")";
+			frame.style.width = width + "px";
+			frame.style.height = height + "px";
+			shell.dataset.scale = String(scale);
+		}
 		function layout(force) {
+			/* compact 断点只看未缩放的容器宽度：缩放不该改变「窄了就收紧列宽」这件事。 */
 			var compact = (root.clientWidth || 1000) < 640;
-			var key = (compact ? "s" : "l") + Array.from(nodes.keys()).join("\u0001");
-			if (!force && key === layoutKey) return;
+			/* 画布宽跟着容器走：同一批成员换到别的容器宽要重新分配列宽，所以宽度进 layoutKey；
+			 * 容器没变时仍然命中缓存，只重算缩放，不重建节点与线条。 */
+			var width = canvasWidth(viewportWidth() || root.clientWidth, compact), box = graphMetrics(width, compact);
+			var key = (compact ? "s" : "l") + width + Array.from(nodes.keys()).join("\u0001");
+			/* 成员与画布宽都没变时 layoutKey 命中，只重算缩放，不重建节点与线条；
+			 * 只有主卡内容偷偷长高（计数换行）时补一次重排。 */
+			if (!force && key === layoutKey && !leaderOverflow()) { applyFit(); return; }
 			layoutKey = key; stopBursts();
 			headings.forEach(function (h) { h.remove(); }); headings = [];
-			var memberX = compact ? 320 : 420, memberW = compact ? 250 : 278, groups = new Map(), y = 24, firstY = null, lastY = null, placed = 0;
+			var memberX = box.memberX, memberW = box.memberW, groups = new Map(), y = 24, firstY = null, lastY = null, placed = 0;
 			nodes.forEach(function (n) { var team = n.raw.team || "default"; if (!groups.has(team)) groups.set(team, []); groups.get(team).push(n); });
 			groups.forEach(function (list, team) {
 				var h = el("div", "cg-team", text(team, 100) + " · " + (list.length + (hiddenTeams.get(team) || 0)) + " 位成员");
@@ -265,8 +356,15 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			var height = Math.max(440, y + 12);
 			/* 主 Agent 垂直居中于最前 4 位成员，并夹在可视上沿附近，长名单下不滚出视野。 */
 			var leaderY = firstY == null ? 148 : Math.min(320, Math.max(24, (firstY + lastY) / 2 - LEADER_H / 2));
-			setBox(main, 28, leaderY, compact ? 196 : 236, LEADER_H);
-			geometry = { width: compact ? 820 : 980, height: height, memberX: memberX, memberRight: memberX + memberW, trunk: memberX - 80 };
+			setBox(main, box.leaderX, leaderY, box.leaderW, LEADER_H);
+			/* 先按常规高度排一次拿到真实宽度，再量内容：窄画布里三行计数、角色、动作加起来会超过 146，
+			 * 那就把主卡加高并重新居中，而不是让那几行被压成 4px 高的条。 */
+			var leaderH = Math.max(LEADER_H, contentHeight(main.element, LEADER_H));
+			if (leaderH !== LEADER_H) {
+				leaderY = firstY == null ? 148 : Math.min(320, Math.max(24, (firstY + lastY) / 2 - leaderH / 2));
+				setBox(main, box.leaderX, leaderY, box.leaderW, leaderH);
+			}
+			geometry = { width: width, height: height, memberX: memberX, memberRight: box.memberRight, leaderRight: box.leaderRight, trunk: box.trunk };
 			canvas.style.width = geometry.width + "px"; canvas.style.height = height + "px";
 			lines.setAttribute("width", String(geometry.width)); lines.setAttribute("height", String(height));
 			lines.setAttribute("viewBox", "0 0 " + geometry.width + " " + height);
@@ -276,6 +374,7 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			applyLanes();
 			nodes.forEach(function (n, nodeKey) { buildNode(nodeKey, n); paintNode(nodeKey, n); });
 			renderEdges(); syncFlows(); applySelection();
+			applyFit();
 		}
 		/* 车道：活跃成员先占互不相同的车道，空闲成员回落到按名册序的稳定车道。 */
 		function applyLanes() {
@@ -351,7 +450,9 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			edges.forEach(function (e) {
 				if (!e.labelPos) return;
 				var width = e.label.offsetWidth || 96, height = e.label.offsetHeight || 22;
-				placed.push({ e: e, width: width, height: height, x: e.labelPos.x, y: e.labelPos.y, center: e.labelPos.center });
+				/* 标签不能跑出画布：窄画布下斜着的那几个字符会被 overflow:hidden 吃掉。 */
+				var maxX = Math.max(4, geometry.width - width - 4), maxY = Math.max(4, geometry.height - height - 4);
+				placed.push({ e: e, width: width, height: height, maxY: maxY, x: Math.min(maxX, Math.max(4, e.labelPos.x)), y: Math.min(maxY, Math.max(4, e.labelPos.y)), center: e.labelPos.center });
 			});
 			placed.sort(function (a, b) { return a.y - b.y; });
 			var settled = [];
@@ -363,7 +464,7 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 				settled.push(item);
 				Object.assign(item.e.label.style, {
 					left: item.x + "px",
-					top: item.y + "px",
+					top: Math.min(item.maxY, item.y) + "px",
 					transform: item.center ? "translateY(-50%)" : "",
 				});
 			});
@@ -533,11 +634,11 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		function setReducedMotion(value) { motion = !value; applyMotion(); if (!motion) stopBursts(); }
 		function onMotion(event) { if (opts.reducedMotion === undefined) setReducedMotion(event.matches); }
 		if (mql && mql.addEventListener) mql.addEventListener("change", onMotion);
-		var observer = typeof global.ResizeObserver === "function" ? new global.ResizeObserver(function () { layout(false); syncFlows(); }) : null;
+		var observer = typeof global.ResizeObserver === "function" ? new global.ResizeObserver(function () { layout(false); applyFit(); syncFlows(); }) : null;
 		if (observer) observer.observe(root);
 		function destroy() { if (destroyed) return; destroyed = true; stopBursts(); if (expiry != null) cancelTimeout(expiry); if (observer) observer.disconnect(); if (mql && mql.removeEventListener) mql.removeEventListener("change", onMotion); nodes.clear(); messages.clear(); edges.clear(); seen.clear(); shell.remove(); }
 		applyMotion(); renderLeader(); layout(true);
 		return { update: update, setLeaderState: setLeaderState, communication: communication, restoreCommunications: restoreCommunications, removeCommunications: removeCommunications, setSelected: setSelected, setVisible: setVisible, setConnected: setConnected, setReducedMotion: setReducedMotion, destroy: destroy };
 	}
-	global.CollaborationGraph = { create: create };
+	global.CollaborationGraph = { create: create, fitScale: fitScale, canvasWidth: canvasWidth, graphMetrics: graphMetrics };
 })(typeof window !== "undefined" ? window : globalThis);
