@@ -1,0 +1,1267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Team 入门 · 让一队 AI 干活，你负责签字</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230b0c0f'/><circle cx='16' cy='16' r='5' fill='%23e9ebf0'/></svg>">
+<meta name="description" content="给第一次使用 pi-agent-orchestrator 的人：agent_team 的机制、手动循环怎么走、六种真实用法和最容易踩的坑。">
+<style>
+:root{
+  --paper:#0b0c0f;
+  --paper-raise:#101218;
+  --paper-deep:#08090b;
+  --ink:#f2f4f8;
+  --ink-body:#c3c9d3;
+  --ink-soft:#a3aab6;
+  --ink-mute:#868d99;
+  --ink-faint:#7c8492;
+  --rule:rgba(255,255,255,.075);
+  --rule-mid:rgba(255,255,255,.14);
+  --rule-strong:rgba(255,255,255,.28);
+  --platinum:#e9ebf0;
+  --platinum-soft:rgba(233,235,240,.12);
+  --warm:#d9a05b;
+  --warm-soft:rgba(217,160,91,.15);
+  --ok:#9fe0b4;
+  --run:#8fc7e8;
+  --warn:#d9a05b;
+  --bad:#e39393;
+  --mono:"SFMono-Regular",Menlo,ui-monospace,"Courier New",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI","Hiragino Sans GB",sans-serif;
+  --serif:"Songti SC","Iowan Old Style","Times New Roman",serif;
+  --r-s:12px;
+  --r-m:18px;
+  --r-l:24px;
+  --r-xl:30px;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --shadow-card:inset 0 1px 0 rgba(255,255,255,.09),0 26px 48px -34px rgba(0,0,0,.92);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{background:#08090b;scroll-behavior:smooth;scroll-padding-top:96px;-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:
+    radial-gradient(ellipse 62% 42% at 12% -6%,rgba(126,142,170,.11) 0%,transparent 66%),
+    radial-gradient(ellipse 50% 38% at 94% 4%,rgba(96,110,138,.09) 0%,transparent 68%),
+    linear-gradient(178deg,#111318 0%,#0b0c0f 46%,#08090b 100%);
+  background-attachment:fixed;
+  color:var(--ink-body);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.85;
+  font-feature-settings:"palt" 1;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(233,235,240,.22);color:#fff}
+:focus-visible{outline:2px solid var(--platinum);outline-offset:3px;border-radius:4px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:var(--paper-deep)}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border:2px solid var(--paper-deep);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.24)}
+
+.progress{position:fixed;inset:0 auto auto 0;height:2px;width:0;background:linear-gradient(90deg,rgba(233,235,240,.5),var(--platinum));z-index:60;transition:width .1s linear}
+
+/* ---------- top bar ---------- */
+.topbar{
+  position:sticky;top:0;z-index:50;
+  display:flex;align-items:center;justify-content:space-between;gap:24px;
+  padding:0 32px;height:60px;
+  background:rgba(11,12,15,.78);
+  backdrop-filter:blur(22px) saturate(120%);
+  -webkit-backdrop-filter:blur(22px) saturate(120%);
+  border-bottom:1px solid var(--rule);
+}
+.topbar__id{display:flex;align-items:center;gap:12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-mute);font-family:var(--mono)}
+.topbar__mark{width:9px;height:9px;border-radius:50%;background:var(--platinum);box-shadow:0 0 0 4px rgba(233,235,240,.09)}
+.topbar__nav{display:flex;gap:26px;font-size:13px;color:var(--ink-soft)}
+.topbar__nav a{color:inherit;text-decoration:none;padding:4px 0;border-bottom:1px solid transparent;transition:color .18s var(--ease),border-color .18s var(--ease)}
+.topbar__nav a:hover{color:var(--ink);border-bottom-color:var(--rule-strong)}
+@media (max-width:880px){.topbar__nav{display:none}.topbar{padding:0 20px;height:54px}}
+
+/* ---------- shell ---------- */
+.shell{
+  max-width:1240px;margin:0 auto;padding:0 32px 140px;
+  display:grid;grid-template-columns:196px minmax(0,1fr);gap:56px;
+}
+@media (max-width:1080px){.shell{grid-template-columns:minmax(0,1fr);gap:0;padding:0 24px 100px}}
+main{min-width:0;max-width:840px}
+@media (max-width:1080px){main{max-width:none}}
+
+/* ---------- toc ---------- */
+.toc{
+  position:sticky;top:96px;align-self:start;
+  padding-top:64px;font-size:13px;line-height:1.5;
+}
+.toc__label{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--ink-faint);margin:0 0 16px}
+.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;counter-reset:toc}
+.toc li{counter-increment:toc}
+.toc a{
+  display:grid;grid-template-columns:22px 1fr;gap:6px;align-items:baseline;
+  padding:7px 0 7px 0;color:var(--ink-mute);text-decoration:none;
+  border-left:2px solid transparent;padding-left:10px;margin-left:-12px;
+  transition:color .18s var(--ease),border-color .18s var(--ease);
+}
+.toc a::before{content:counter(toc,decimal-leading-zero);font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em}
+.toc a:hover{color:var(--ink-body)}
+.toc a.is-active{color:var(--ink);border-left-color:var(--platinum)}
+.toc a.is-active::before{color:var(--warm)}
+@media (max-width:1080px){
+  .toc{position:static;padding:28px 0 4px;border-bottom:1px solid var(--rule);min-width:0;max-width:100%;overflow:hidden}
+  .toc__label{display:none}
+  .toc ol{flex-direction:row;overflow-x:auto;gap:18px;padding-bottom:12px;scrollbar-width:none;min-width:0;max-width:100%}
+  .toc ol::-webkit-scrollbar{display:none}
+  .toc a{grid-template-columns:auto auto;white-space:nowrap;border-left:0;padding:2px 0;margin:0}
+  .toc a.is-active{border-left:0;border-bottom:1px solid var(--platinum);padding-bottom:4px}
+}
+
+/* ---------- hero ---------- */
+.hero{padding:76px 0 56px;border-bottom:1px solid var(--rule);display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:48px;align-items:center}
+@media (max-width:1080px){.hero{padding:52px 0 44px;grid-template-columns:1fr;gap:36px}}
+.eyebrow{
+  font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--ink-faint);margin:0 0 26px;display:flex;align-items:center;gap:10px;
+}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--rule);max-width:120px}
+h1{
+  font-family:var(--serif);font-weight:600;
+  font-size:clamp(38px,5.4vw,60px);line-height:1.16;letter-spacing:-.015em;
+  color:var(--ink);margin:0 0 26px;
+}
+h1 em{font-style:normal;color:var(--warm)}
+.lead{font-size:17px;line-height:1.9;color:var(--ink-soft);margin:0;max-width:34em}
+.lead code{font-size:.92em}
+.hero__figure{margin:0;justify-self:center;width:100%;max-width:336px}
+.hero__figure svg{width:100%;height:auto;display:block;overflow:visible}
+.hero__figure figcaption{font-size:11.5px;color:var(--ink-faint);margin-top:14px;line-height:1.6;font-family:var(--mono);letter-spacing:.02em}
+
+.facts{
+  grid-column:1 / -1;
+  display:grid;grid-template-columns:repeat(3,1fr);gap:0;
+  margin:44px 0 0;border-top:1px solid var(--rule);
+}
+.fact{padding:24px 22px 0 0;border-right:1px solid var(--rule)}
+.fact:last-child{border-right:0;padding-right:0}
+.fact__num{font-family:var(--mono);font-size:26px;line-height:1;color:var(--ink);letter-spacing:-.02em;display:block;margin-bottom:10px}
+.fact__num small{font-size:12px;letter-spacing:.02em;color:var(--ink-faint);margin-left:5px}
+.fact__label{font-size:13px;color:var(--ink-soft);line-height:1.65}
+@media (max-width:720px){
+  .facts{grid-template-columns:1fr;border-top:0}
+  .fact{border-right:0;border-top:1px solid var(--rule);padding:18px 0 0;display:flex;gap:18px;align-items:baseline}
+  .fact__num{margin:0;flex:0 0 auto;font-size:20px}
+}
+
+/* ---------- sections ---------- */
+section{padding-top:76px}
+section:first-of-type{padding-top:64px}
+h2{
+  font-family:var(--sans);font-weight:600;
+  font-size:clamp(24px,3vw,30px);line-height:1.35;letter-spacing:-.012em;
+  color:var(--ink);margin:0 0 8px;display:flex;gap:14px;align-items:baseline;
+}
+.sec-no{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--warm);flex:0 0 auto;transform:translateY(-4px)}
+h2 + .sub{font-size:14.5px;color:var(--ink-mute);margin:0 0 34px;padding-left:38px}
+@media (max-width:600px){h2 + .sub{padding-left:0}}
+h3{font-size:17.5px;font-weight:600;color:var(--ink);margin:40px 0 12px;letter-spacing:-.005em}
+h4{font-size:13px;font-weight:600;color:var(--ink);margin:0 0 6px;letter-spacing:.01em}
+p{margin:0 0 18px}
+p:last-child{margin-bottom:0}
+a{color:var(--ink);text-decoration-color:var(--rule-strong);text-underline-offset:3px}
+strong{color:var(--ink);font-weight:600}
+ul,ol{margin:0 0 18px;padding-left:1.2em}
+li{margin-bottom:8px}
+li:last-child{margin-bottom:0}
+code{
+  font-family:var(--mono);font-size:.86em;color:#dfe4ec;
+  background:rgba(255,255,255,.055);border-radius:6px;padding:.12em .42em;
+  white-space:nowrap;
+}
+.prose-note{font-size:14px;color:var(--ink-mute);line-height:1.8}
+kbd{
+  font-family:var(--mono);font-size:11.5px;color:var(--ink-body);
+  background:rgba(255,255,255,.06);border:1px solid var(--rule-mid);
+  border-bottom-width:2px;border-radius:5px;padding:1px 6px;margin:0 2px;
+}
+
+.note{
+  border-left:2px solid var(--warm);padding:2px 0 2px 16px;margin:26px 0;
+  font-size:14px;line-height:1.8;color:var(--ink-soft);
+}
+.note strong{color:var(--ink)}
+.note--cool{border-left-color:rgba(143,199,232,.7)}
+.note--danger{border-left-color:rgba(227,147,147,.8)}
+
+/* ---------- role grid ---------- */
+.roles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 8px}
+@media (max-width:860px){.roles{grid-template-columns:1fr}}
+.role{
+  background:linear-gradient(168deg,rgba(255,255,255,.055) 0%,rgba(255,255,255,.016) 100%);
+  border:1px solid var(--rule);border-radius:var(--r-l);
+  padding:22px 20px 20px;box-shadow:var(--shadow-card);
+}
+.role__tag{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px;display:block}
+.role h4{font-size:16px;margin-bottom:10px}
+.role p{font-size:13.5px;line-height:1.8;color:var(--ink-soft);margin:0}
+.role--leader{
+  background:linear-gradient(158deg,#fafbfd 0%,#e9ecf2 52%,#ccd1da 100%);
+  border-color:rgba(255,255,255,.55);
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.95),0 0 0 1px rgba(255,255,255,.4),0 30px 54px -28px rgba(0,0,0,.86),0 0 40px -18px rgba(255,255,255,.16);
+}
+.role--leader .role__tag{color:rgba(15,17,21,.55)}
+.role--leader h4,.role--leader strong{color:#0f1115}
+.role--leader p{color:rgba(15,17,21,.74)}
+.role--leader code{background:rgba(15,17,21,.09);color:#14161b}
+
+/* ---------- tables ---------- */
+.table-wrap{margin:26px 0 30px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;min-width:520px}
+caption{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);padding-bottom:12px}
+th{
+  font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+  text-align:left;padding:0 18px 10px 0;border-bottom:1px solid var(--rule-mid);white-space:nowrap;
+}
+th:last-child,td:last-child{padding-right:0}
+td{
+  padding:14px 18px 14px 0;border-bottom:1px solid var(--rule);
+  vertical-align:top;font-size:14px;line-height:1.72;color:var(--ink-soft);
+}
+td strong{color:var(--ink)}
+td .mono{font-family:var(--mono);font-size:12.5px;color:#dfe4ec;letter-spacing:-.01em}
+td:first-child{color:var(--ink);font-size:14px}
+tr:last-child td{border-bottom:0}
+
+/* ---------- code ---------- */
+.code{
+  position:relative;margin:22px 0 26px;
+  background:rgba(0,0,0,.42);
+  border:1px solid var(--rule);border-radius:var(--r-m);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035);
+  overflow:hidden;
+}
+.code__head{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:9px 12px 9px 16px;border-bottom:1px solid var(--rule);
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+}
+.code__head span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.copy{
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-mute);background:transparent;border:1px solid var(--rule-mid);
+  border-radius:99px;padding:4px 11px;cursor:pointer;flex:0 0 auto;
+  transition:color .18s var(--ease),border-color .18s var(--ease),background .18s var(--ease);
+}
+.copy:hover{color:var(--ink);border-color:var(--rule-strong);background:rgba(255,255,255,.05)}
+.copy.is-done{color:var(--ok);border-color:rgba(159,224,180,.45)}
+.code pre{
+  margin:0;padding:18px 20px 20px;overflow-x:auto;
+  font-family:var(--mono);font-size:12.8px;line-height:1.82;color:#dfe4ec;tab-size:2;
+}
+.code pre code{background:none;padding:0;font-size:inherit;white-space:pre;color:inherit}
+.tk-k{color:#c9d5ea}
+.tk-s{color:#d8bfa0}
+.tk-c{color:#6b7280;font-style:italic}
+.tk-n{color:#a8c8e0}
+.tk-bad{color:#e39393}
+.tk-ok{color:#9fe0b4}
+
+/* ---------- plan anatomy ---------- */
+.anatomy{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:26px 0 8px}
+@media (max-width:700px){.anatomy{grid-template-columns:1fr}}
+.anat{
+  border:1px solid var(--rule);border-radius:var(--r-m);padding:18px 18px 16px;
+  background:rgba(255,255,255,.022);
+}
+.anat__key{font-family:var(--mono);font-size:12.5px;color:var(--warm);letter-spacing:-.01em;display:block;margin-bottom:8px}
+.anat p{font-size:13.5px;line-height:1.78;color:var(--ink-soft);margin:0}
+
+.kinds{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 26px}
+.kind{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.02em;
+  border:1px solid var(--rule-mid);border-radius:999px;padding:5px 12px;
+  color:var(--ink-soft);background:rgba(255,255,255,.025);
+}
+.kind b{color:var(--ink);font-weight:600}
+.kind--ro{color:var(--ink-mute);border-style:dashed}
+
+/* ---------- pipeline ---------- */
+.pipeline{margin:34px 0 10px}
+.pipeline__track{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px 28px;align-items:stretch}
+@media (max-width:860px){.pipeline__track{grid-template-columns:1fr;gap:0}}
+.step{
+  position:relative;padding:16px 0 0;
+  border-top:1px solid var(--rule-mid);
+}
+.step__tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);display:block;margin-bottom:8px}
+.step__name{font-size:13.5px;color:var(--ink);font-weight:600;display:block;line-height:1.5}
+.step__desc{font-size:12px;color:var(--ink-mute);line-height:1.65;display:block;margin-top:5px}
+.step::before{
+  content:"";position:absolute;top:-2.5px;left:0;width:4px;height:4px;border-radius:50%;
+  background:var(--platinum);box-shadow:0 0 0 3px rgba(233,235,240,.1);
+}
+.step--head::before{background:var(--warm);box-shadow:0 0 0 3px var(--warm-soft)}
+@media (max-width:860px){
+  .step{padding:14px 0 14px 20px;border-top:0;border-left:1px solid var(--rule-mid)}
+  .step::before{top:20px;left:-2.5px}
+  .step:last-child{border-left-color:transparent}
+}
+.loop{
+  margin-top:12px;font-family:var(--mono);font-size:11.5px;color:var(--ink-mute);
+  display:flex;align-items:center;gap:10px;line-height:1.7;
+}
+.loop::before{content:"↺";color:var(--warm);font-size:15px;line-height:1}
+
+/* ---------- envelopes ---------- */
+.envs{display:grid;gap:2px;margin:26px 0 8px;border:1px solid var(--rule);border-radius:var(--r-l);overflow:hidden}
+.env{background:rgba(255,255,255,.018);padding:0}
+.env__body{display:grid;grid-template-columns:150px minmax(0,1fr);gap:18px;padding:18px 20px;align-items:start}
+@media (max-width:760px){.env__body{grid-template-columns:1fr;gap:10px}}
+.env__name{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);padding-top:3px}
+.env__name b{display:block;font-family:var(--sans);font-size:13.5px;letter-spacing:0;text-transform:none;color:var(--ink);font-weight:600;margin-top:6px}
+.env .code{margin:0;border-radius:0;border:0;background:rgba(0,0,0,.35)}
+.env .code pre{padding:14px 16px;font-size:12.2px;line-height:1.78}
+.env .code pre code{white-space:pre-wrap;word-break:break-word}
+.env + .env{border-top:1px solid var(--rule)}
+
+.rules-list{list-style:none;padding:0;margin:24px 0;counter-reset:r}
+.rules-list li{
+  counter-increment:r;position:relative;padding:12px 0 12px 44px;
+  border-bottom:1px solid var(--rule);font-size:14.5px;line-height:1.78;
+}
+.rules-list li::before{
+  content:counter(r);position:absolute;left:0;top:12px;
+  font-family:var(--mono);font-size:11px;color:var(--warm);
+  width:22px;height:22px;border:1px solid var(--rule-mid);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+}
+.rules-list li:last-child{border-bottom:0}
+
+/* ---------- flow steps ---------- */
+.flow{margin:30px 0 0;border-top:1px solid var(--rule)}
+.flow__item{
+  display:grid;grid-template-columns:64px minmax(0,1fr);gap:24px;
+  padding:30px 0;border-bottom:1px solid var(--rule);
+}
+@media (max-width:680px){.flow__item{grid-template-columns:44px minmax(0,1fr);gap:16px;padding:24px 0}}
+.flow__num{
+  font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--warm);
+  padding-top:4px;
+}
+.flow__num small{display:block;color:var(--ink-faint);font-size:11px;letter-spacing:.12em;margin-top:6px}
+.flow__body h4{font-size:16.5px;margin-bottom:8px;letter-spacing:-.005em}
+.flow__body p{font-size:14.5px;line-height:1.8;margin-bottom:12px}
+.flow__body > :last-child{margin-bottom:0}
+.flow__body .code{margin:14px 0 16px}
+
+/* ---------- cases ---------- */
+.cases{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:30px;align-items:start}
+@media (max-width:860px){.cases{grid-template-columns:1fr}}
+.case{
+  border:1px solid var(--rule);border-radius:var(--r-l);padding:24px 22px 4px;
+  background:linear-gradient(172deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+  box-shadow:var(--shadow-card);
+  display:flex;flex-direction:column;
+}
+.case--wide{grid-column:1 / -1}
+.case__top{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.case__no{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--warm)}
+.case h3{font-size:17px;margin:0;flex:1;line-height:1.4}
+.case__when{font-size:13.5px;color:var(--ink-mute);line-height:1.75;margin:0 0 14px}
+.case__roster{
+  display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--ink-faint);
+  margin:0 0 12px;
+}
+.case__roster b{color:var(--ink-soft);font-weight:500;letter-spacing:.02em}
+.case__roster i{color:var(--rule-strong);font-style:normal}
+.case .code{margin:0 0 16px}
+.case .code pre{padding:16px}
+.case .code pre code{white-space:pre-wrap;word-break:break-word}
+.case__foot{font-size:13px;color:var(--ink-soft);line-height:1.78;border-top:1px solid var(--rule);margin:0;padding:16px 0 22px}
+.case__foot b{color:var(--ink)}
+.case__foot span{display:block;margin-top:8px;color:var(--ink-mute);font-size:12.5px}
+.case--wide .case__grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start;margin-top:2px}
+.case--wide .case__grid--foot{margin-top:0;align-items:start}
+.case--wide .case__grid--foot p{font-size:13.5px;line-height:1.75;color:var(--ink-soft);margin:0}
+.case--wide .case__grid--foot .case__foot{border-top:0;padding:0}
+.case--wide .case__grid--foot{column-gap:0}
+.case--wide .case__grid--foot p:first-child{padding-right:26px;border-right:1px solid var(--rule)}
+.case--wide .case__grid--foot p:last-child{padding-left:26px}
+@media (max-width:760px){.case--wide .case__grid{grid-template-columns:1fr}}
+
+/* ---------- pitfalls ---------- */
+.pitfalls{list-style:none;padding:0;margin:28px 0 0;counter-reset:p}
+.pitfall{
+  counter-increment:p;position:relative;
+  display:grid;grid-template-columns:52px minmax(0,1fr);gap:20px;
+  padding:24px 0;border-top:1px solid var(--rule);
+}
+.pitfall:last-child{border-bottom:1px solid var(--rule)}
+.pitfall::before{
+  content:counter(p,decimal-leading-zero);
+  font-family:var(--mono);font-size:12px;color:var(--bad);padding-top:3px;
+}
+@media (max-width:600px){.pitfall{grid-template-columns:36px minmax(0,1fr);gap:12px}}
+.pitfall h4{font-size:15.5px;margin-bottom:7px;line-height:1.5}
+.pitfall p{font-size:14px;line-height:1.8;color:var(--ink-soft);margin:0}
+.pitfall p code{font-size:.85em}
+
+/* ---------- cheat ---------- */
+.cheat{border-top:1px solid var(--rule-mid);margin-top:26px}
+.cheat td:first-child{font-family:var(--mono);font-size:12.5px;color:#dfe4ec;white-space:nowrap}
+.cheat th:nth-child(1),.cheat td:nth-child(1){width:22%}
+.cheat th:nth-child(3),.cheat td:nth-child(3){width:34%}
+.cheat td:nth-child(2){color:var(--ink-body)}
+.cheat td:last-child{font-size:13px;color:var(--ink-mute)}
+.cmd{font-family:var(--mono);font-size:12.5px;color:#dfe4ec;background:rgba(255,255,255,.055);border-radius:6px;padding:.1em .4em}
+.split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:26px 0}
+@media (max-width:760px){.split{grid-template-columns:1fr}}
+.panel{border:1px solid var(--rule);border-radius:var(--r-m);padding:20px;background:rgba(255,255,255,.02)}
+.panel h4{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
+.panel ul{list-style:none;padding:0;margin:0;font-size:13.5px;line-height:1.9}
+.panel li{display:flex;justify-content:space-between;gap:14px;border-bottom:1px solid var(--rule);padding:7px 0}
+.panel li:last-child{border-bottom:0}
+.panel li span:last-child{color:var(--ink-mute);font-size:12.5px;text-align:right}
+
+footer{margin-top:96px;padding-top:32px;border-top:1px solid var(--rule);font-size:12.5px;color:var(--ink-faint);line-height:1.9}
+footer p{margin-bottom:10px}
+footer .src{font-family:var(--mono);font-size:11.5px;color:var(--ink-mute);display:block;margin-top:4px}
+footer .end{font-family:var(--serif);font-size:15px;color:var(--ink-soft);margin-top:28px}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="topbar__id"><span class="topbar__mark" aria-hidden="true"></span>Agent Team · 入门</div>
+  <nav class="topbar__nav" aria-label="页面导航">
+    <a href="#model">角色</a>
+    <a href="#plan">计划</a>
+    <a href="#loop">循环</a>
+    <a href="#cases">用法</a>
+    <a href="#cheat">速查</a>
+  </nav>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="目录">
+    <p class="toc__label">CONTENTS</p>
+    <ol>
+      <li><a href="#model">谁在指挥谁</a></li>
+      <li><a href="#plan">一次注册的计划</a></li>
+      <li><a href="#scope">授权地图</a></li>
+      <li><a href="#loop">手动循环</a></li>
+      <li><a href="#envelope">报告信封与状态</a></li>
+      <li><a href="#start">上手六步</a></li>
+      <li><a href="#cases">六种用法</a></li>
+      <li><a href="#pitfalls">六个坑</a></li>
+      <li><a href="#cheat">速查表</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section class="hero" aria-labelledby="title">
+      <div>
+        <p class="eyebrow">Pi Extension · pi-agent-orchestrator</p>
+        <h1 id="title">让一队 AI 干活，<br>你负责<em>签字</em>。</h1>
+        <p class="lead">
+          <code>agent_team</code> 不是「一句话丢进去自动完成」的按钮。它是一个控制面：你出目标和验收标准，主 Pi 当 Leader 写计划、派活、解释结果，成员各自开一个独立会话动手。runtime 只记账、守门，从不替任何人点下一步。下面先把机制拆开，再给六种真实用法。
+        </p>
+      </div>
+      <figure class="hero__figure">
+        <svg viewBox="0 0 336 260" role="img" aria-label="示意图：左侧一个主 Agent，右侧三个成员，箭头表示派发，虚线表示回报">
+          <defs>
+            <linearGradient id="porcelain" x1="0" y1="0" x2="0.3" y2="1">
+              <stop offset="0" stop-color="#fafbfd"/>
+              <stop offset="0.56" stop-color="#e7eaf0"/>
+              <stop offset="1" stop-color="#ccd1da"/>
+            </linearGradient>
+            <linearGradient id="glass" x1="0" y1="0" x2="0.2" y2="1">
+              <stop offset="0" stop-color="rgba(255,255,255,0.11)"/>
+              <stop offset="1" stop-color="rgba(255,255,255,0.03)"/>
+            </linearGradient>
+          </defs>
+          <path d="M104 130 C158 130 166 62 216 62" fill="none" stroke="rgba(206,216,234,0.34)" stroke-width="1.4"/>
+          <path d="M104 130 C158 130 166 130 216 130" fill="none" stroke="rgba(206,216,234,0.48)" stroke-width="1.6"/>
+          <path d="M104 130 C158 130 166 198 216 198" fill="none" stroke="rgba(206,216,234,0.34)" stroke-width="1.4"/>
+          <path d="M216 156 C172 156 148 144 110 140" fill="none" stroke="rgba(217,160,91,0.46)" stroke-width="1.2" stroke-dasharray="3 5"/>
+
+          <rect x="8" y="94" width="96" height="72" rx="20" fill="url(#porcelain)" stroke="rgba(255,255,255,0.7)" stroke-width="1"/>
+          <text x="26" y="126" fill="#0f1115" font-family="SFMono-Regular,Menlo,monospace" font-size="11" letter-spacing="0.6">LEADER</text>
+          <text x="26" y="145" fill="rgba(15,17,21,0.62)" font-family="-apple-system,PingFang SC,sans-serif" font-size="9.5">写计划 · 派活</text>
+
+          <rect x="224" y="36" width="104" height="52" rx="15" fill="url(#glass)" stroke="rgba(255,255,255,0.13)"/>
+          <rect x="224" y="36" width="3" height="52" rx="1.5" fill="#8fc7e8"/>
+          <text x="240" y="60" fill="#dfe4ec" font-family="SFMono-Regular,Menlo,monospace" font-size="10.5">coder</text>
+          <text x="240" y="75" fill="rgba(223,228,236,0.45)" font-family="-apple-system,PingFang SC,sans-serif" font-size="9">RUNNING</text>
+
+          <rect x="224" y="104" width="104" height="52" rx="15" fill="url(#glass)" stroke="rgba(255,255,255,0.13)"/>
+          <rect x="224" y="104" width="3" height="52" rx="1.5" fill="#8fc7e8"/>
+          <text x="240" y="128" fill="#dfe4ec" font-family="SFMono-Regular,Menlo,monospace" font-size="10.5">reviewer</text>
+          <text x="240" y="143" fill="rgba(223,228,236,0.45)" font-family="-apple-system,PingFang SC,sans-serif" font-size="9">IDLE</text>
+
+          <rect x="224" y="172" width="104" height="52" rx="15" fill="url(#glass)" stroke="rgba(255,255,255,0.13)"/>
+          <rect x="224" y="172" width="3" height="52" rx="1.5" fill="rgba(255,255,255,0.22)"/>
+          <text x="240" y="196" fill="#dfe4ec" font-family="SFMono-Regular,Menlo,monospace" font-size="10.5">debugger</text>
+          <text x="240" y="211" fill="rgba(223,228,236,0.45)" font-family="-apple-system,PingFang SC,sans-serif" font-size="9">READ-ONLY</text>
+
+          <circle cx="216" cy="62" r="2" fill="rgba(233,235,240,0.82)"/>
+          <circle cx="216" cy="130" r="2" fill="rgba(233,235,240,0.82)"/>
+          <circle cx="216" cy="198" r="2" fill="rgba(233,235,240,0.82)"/>
+        </svg>
+        <figcaption>派发走实线，回报走虚线。每条线都由 Leader 显式发起。</figcaption>
+      </figure>
+
+      <div class="facts">
+        <div class="fact">
+          <span class="fact__num">2<small>名起</small></span>
+          <span class="fact__label">最少成员数。一名动手的 Coder，加一名只读的 Reviewer。</span>
+        </div>
+        <div class="fact">
+          <span class="fact__num">10<small>个状态</small></span>
+          <span class="fact__label">任务在 PENDING 到 VERIFIED 之间流转，其中只有 Reviewer 能写 VERIFIED。</span>
+        </div>
+        <div class="fact">
+          <span class="fact__num">0<small>自动调度</small></span>
+          <span class="fact__label">没有「跑完自动接下一单」。每个节点都要 Leader 显式发起。</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 01 角色 ============ -->
+    <section id="model" aria-labelledby="h-model">
+      <h2 id="h-model"><span class="sec-no">01</span>谁在指挥谁</h2>
+      <p class="sub">先分清三个角色和一本账，后面所有规矩都是从这儿长出来的。</p>
+
+      <p>这套东西里没有「老板 AI」替你完成任务。工作被拆成三份：<strong>你出目标和验收，主 Pi 出计划和判断，成员出执行</strong>。第四样东西是 runtime，它不生产任何决策。</p>
+
+      <div class="roles">
+        <article class="role">
+          <span class="role__tag">You</span>
+          <h4>你</h4>
+          <p>说清要什么结果、哪些文件可以动、怎么算通过。最后验收只有你能签。你不需要会写 plan，但要知道它定了什么。</p>
+        </article>
+        <article class="role role--leader">
+          <span class="role__tag">Main Pi</span>
+          <h4>主 Pi · 唯一 Leader</h4>
+          <p>写计划、派工、解释 Reviewer 的意见、决定重试还是换人还是停手。上下文丢了就以 <code>status</code> 为唯一事实源。</p>
+        </article>
+        <article class="role">
+          <span class="role__tag">Members</span>
+          <h4>成员 · 独立会话</h4>
+          <p>每个成员有自己的 Session、人格、工具和可写路径。它看不到整个项目的来龙去脉，只看到本轮的局部任务，交回一份报告信封。</p>
+        </article>
+      </div>
+
+      <h3>runtime 是一本账加一道门</h3>
+      <p>它保存实时状态，校验成员授权、任务依赖、成员忙闲和路径冲突，把结果传回给 Leader。它<strong>不做</strong>三件事：不选专家、不创建任务、不自动派发下一步。</p>
+
+      <div class="note">
+        <strong>这条边界是有意留的。</strong>多 Agent 最怕的不是算力不够，是没人负责。所有推进点都压在 Leader 一个人身上，出问题时你知道该问谁、该回滚到哪。
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>决定权归属</caption>
+          <thead>
+            <tr><th>这件事</th><th>谁说了算</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>要做什么、能改哪些文件、怎么算完成</td><td>你，在 plan 的确认门里定下来</td></tr>
+            <tr><td>计划长什么样（名册、依赖、路径、验收）</td><td>主 Pi 起草，你点同意</td></tr>
+            <tr><td>这一轮过没过</td><td>plan 里指定的<strong>那一个</strong> Reviewer</td></tr>
+            <tr><td>下一步跑哪个任务</td><td>Leader 显式调用 <code>run</code> / <code>parallel</code> / <code>review</code></td></tr>
+            <tr><td>任务算不算完成</td><td>先由 Reviewer 写 <code>VERIFIED</code>，再由你 <code>HUMAN_ACCEPT</code></td></tr>
+            <tr><td>自动重试、自动熔断、自动接下一单</td><td>没有这个功能。告警只告警，绝不自动动手</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="prose-note">顺带一个容易忽略的事实：成员是<strong>同一个账号</strong>、各自带 bash 的独立进程。它不是一个被沙箱锁住的函数。这决定了后面「路径授权」那节的调性——那是声明，不是牢门。</p>
+    </section>
+
+    <!-- ============ 02 计划 ============ -->
+    <section id="plan" aria-labelledby="h-plan">
+      <h2 id="h-plan"><span class="sec-no">02</span>一次注册的计划</h2>
+      <p class="sub">复杂任务不许边干边加人。开工前一次把名册、裁决者、依赖、写权限、验收全部固定。</p>
+
+      <p>所有派工都要先注册一份 plan。runtime 拒绝「没规划就直接跑」的调用，也拒绝在计划外用 inline 参数临时塞一个成员或任务。计划一旦注册，后续每轮只按 taskId 推进，不再重新描述需求。</p>
+
+      <div class="anatomy">
+        <div class="anat">
+          <span class="anat__key">members[]</span>
+          <p>名册。<strong>只增不减。</strong>每名成员有 id、kind、role、一份完整的角色书，可选指定模型、思考程度和工具白名单。</p>
+        </div>
+        <div class="anat">
+          <span class="anat__key">reviewerId</span>
+          <p>唯一裁决者。全队只有这一个成员能写下 <code>VERIFIED</code> 或 <code>FIX_REQUIRED</code>。</p>
+        </div>
+        <div class="anat">
+          <span class="anat__key">tasks[]</span>
+          <p>任务图。每个任务挂一名成员、一条依赖关系（dependsOn）、一组可写路径（ownedPaths）、一组局部验收标准。</p>
+        </div>
+        <div class="anat">
+          <span class="anat__key">acceptance[]</span>
+          <p>全局完成标准。Reviewer 的最终验证要对照它，你签字时也对照它。</p>
+        </div>
+      </div>
+
+      <div class="code">
+        <div class="code__head"><span>最小可用的两人团队 · plan</span><button class="copy" type="button">复制</button></div>
+        <pre><code>agent_team({
+  action: "plan",
+  team: "default",
+  plan: {
+    members: [
+      {
+        id: "coder",
+        kind: "coder",
+        role: "后端实现工程师",
+        instructions: "你是本团队的资深后端工程师，专精 TypeScript 与 Node 运行时。"
+          + "职责：只实现 TaskPacket 内 owned paths 的改动，动手前先读调用方。"
+          + "边界：不碰他人文件，不做架构决策。风格：代码优先、行文极简。"
+          + "需求模糊时返回 BLOCK 并附问题，不猜测。结尾按约定输出执行 JSON envelope。"
+      },
+      {
+        id: "reviewer",
+        kind: "reviewer",
+        role: "独立评审",
+        instructions: "你是团队的独立质量门：怀疑一切、只认证据，仅对判定结果负责。"
+          + "边界：只读，绝不编辑文件。风格：严格对照 acceptance 逐条核验。"
+          + "通过 review envelope 输出判定；FIX_REQUIRED 必须附可执行的 fix_prompt。",
+        tools: ["read", "grep", "find", "ls"]
+      }
+    ],
+    reviewerId: "reviewer",
+    tasks: [{
+      id: "impl",
+      memberId: "coder",
+      objective: "把会话过期时间从硬编码改成读环境变量，默认值保持不变",
+      constraints: ["不改公开函数签名"],
+      dependsOn: [],
+      ownedPaths: ["src/session"],
+      acceptance: ["SESSION_TTL 未设置时行为与改动前一致"],
+      relevantPaths: ["src/session/store.ts"]
+    }],
+    acceptance: ["Reviewer 最终验证通过后，由用户执行 HUMAN_ACCEPT"]
+  }
+})</code></pre>
+      </div>
+
+      <h3>五类成员，各管一件事</h3>
+      <div class="kinds">
+        <span class="kind"><b>coder</b> 写代码，唯一默认带 MCP 的角色</span>
+        <span class="kind"><b>reviewer</b> 判过不过，唯一能写 verdict</span>
+        <span class="kind kind--ro"><b>debugger</b> 只读诊断</span>
+        <span class="kind kind--ro"><b>product</b> 只读产品视角</span>
+        <span class="kind kind--ro"><b>optimizer</b> 只读优化候选，只接已通过的成果</span>
+      </div>
+      <p class="prose-note">后三种只能通过 expert 通道出场，不写 verdict、不取写权限。只读角色默认拿不到 MCP，要在计划里逐个点名具体的 <code>mcp__server__tool</code> 才会给——这样「只读」不会因为默认能力被静默放大。</p>
+
+      <h3>instructions 是成员唯一的人格来源</h3>
+      <p>它会原样注入成员进程。写一句话「你是工程师，帮我写代码」的结果，是成员每一轮都在猜你的标准。<strong>一份能用的角色书要写清五件事</strong>：职责与专长、边界（不碰什么、不决策什么）、行事风格、输出要求、和其他成员怎么配合。</p>
+
+      <div class="note note--danger">
+        <strong>改指令不会改写历史。</strong>成员会话按 Session 复用，旧上下文仍然主导输出。想改一个已经跑歪的成员，正确做法是 <code>kill</code> 掉、用 amendment 加一名替补（新 Session、新角色书），把任务和 reviewerId 切过去；反复重发同一个提示词，大概率复现同一个错误。
+      </div>
+
+      <h3>先复用，再新增</h3>
+      <p>新增成员的成本比看起来高：多一个 Session、一份角色书、一次确认门，而且名册<strong>永远删不掉</strong>。所以在加人之前先回答一句：「现有成员的 kind、角色书和权限边界，为什么盖不住这件事？」答不上来，就把新任务派给既有成员。</p>
+    </section>
+
+    <!-- ============ 03 授权地图 ============ -->
+    <section id="scope" aria-labelledby="h-scope">
+      <h2 id="h-scope"><span class="sec-no">03</span>成员看到的授权地图</h2>
+      <p class="sub">成员读不到你写的完整需求。它每轮看到的是一张图：队友是谁、各自能写哪儿、谁终裁。</p>
+
+      <p>每次派发，提示词的第一段都是同一张队内地图（<code>[TEAM SCOPE]</code>）。它不是背景介绍，而是成员判断「这件事该不该我做、这个文件该不该我改」的唯一依据。</p>
+
+      <div class="code">
+        <div class="code__head"><span>派发首段 · 以 reviewer 的视角（内容按你的 plan 生成）</span></div>
+        <pre><code>[TEAM SCOPE]
+- coder — coder · 后端实现工程师 — owns: src/session
+- reviewer: reviewer
+联系与同伴消息不授予写入权，也不改变这张图。
+[/TEAM SCOPE]</code></pre>
+      </div>
+
+      <p>每行一句话给全三样：<strong>谁是队友</strong>（id、kind、角色）、<strong>他能写到哪里</strong>（该成员全部任务 ownedPaths 的并集，没有任务就写 none）、以及最后单独一行的<strong>终裁者</strong>。名册按 id 排序，跳过自己与已停止的成员，超过 12 人只保留前 11 行并追加「…另有 N 位见 status」。图每轮重建，不进缓存，所以它总是当下的事实。</p>
+
+      <div class="note note--cool">
+        想让成员守边界，靠的是这张图里的 ownedPaths 写准确，不是靠 instructions 里叮嘱十遍。反过来，末行那句「联系与同伴消息不授予写入权」也在同一张图里——<strong>能发消息不等于能写对方的文件</strong>。
+      </div>
+
+      <h3>ownedPaths 是声明，不是沙箱</h3>
+      <p>成员和你是同一个系统账号，各带 bash。模型层拦不住越界写，实际能做的只有事后审计：每轮结束时 runtime 比对前后两次 <code>git status</code>，把 ownedPaths 之外新增的路径记成一条 workspace warning 交回 Leader。<strong>只告警，不回滚，不阻断</strong>；非 git 工作区根本检测不到。</p>
+      <p>所以路径写细一点不是为了流程好看，是为了让这条告警有信号。写 <code>src</code> 这样的目录范围，等于放弃了这项检查。</p>
+    </section>
+
+    <!-- ============ 04 循环 ============ -->
+    <section id="loop" aria-labelledby="h-loop">
+      <h2 id="h-loop"><span class="sec-no">04</span>手动循环</h2>
+      <p class="sub">一条主线，一个回环。每一跳都得有人按，按的人永远是 Leader。</p>
+
+      <div class="pipeline">
+        <div class="pipeline__track">
+          <div class="step step--head">
+            <span class="step__tag">01</span>
+            <span class="step__name">plan</span>
+            <span class="step__desc">注册名册、依赖、写权限、验收</span>
+          </div>
+          <div class="step">
+            <span class="step__tag">02</span>
+            <span class="step__name">run / parallel</span>
+            <span class="step__desc">派一个，或派一整批</span>
+          </div>
+          <div class="step">
+            <span class="step__tag">03</span>
+            <span class="step__name">SUBMITTED</span>
+            <span class="step__desc">成员交回报告信封</span>
+          </div>
+          <div class="step">
+            <span class="step__tag">04</span>
+            <span class="step__name">review</span>
+            <span class="step__desc">唯一裁决者出场</span>
+          </div>
+          <div class="step step--head">
+            <span class="step__tag">05</span>
+            <span class="step__name">VERIFIED</span>
+            <span class="step__desc">通过；不通过就同一任务返工</span>
+          </div>
+          <div class="step">
+            <span class="step__tag">06</span>
+            <span class="step__name">HUMAN_ACCEPT</span>
+            <span class="step__desc">你签字，再由 Leader 调 close</span>
+          </div>
+        </div>
+        <p class="loop">FIX_REQUIRED 不新建任务：同一个 taskId 开下一个 attempt，Reviewer 的 fix_prompt 原样带回去。</p>
+      </div>
+
+      <h3>五条硬规则</h3>
+      <ul>
+        <li><strong>只有 SUBMITTED 能被审。</strong>Reviewer 看不到正在跑的任务，也审不了还没交的东西。</li>
+        <li><strong>只有 VERIFIED 和 CANCELED 释放写锁。</strong>任务从 RUNNING 到你验收之前，路径一直被它占着，别人碰不了。</li>
+        <li><strong>VERIFIED 会把下游点亮成 READY。</strong>依赖关系靠状态流转，不靠人记。</li>
+        <li><strong>parallel 有三条硬约束</strong>：同批成员互异、依赖都已 VERIFIED、路径两两不冲突（相等或父子包含都算冲突）。一批最多 8 个任务。</li>
+        <li><strong>并行里有一次启动失败，同批其余 attempt 会被中断</strong>，并等它们离开运行态。没有「部分成功继续跑」。</li>
+      </ul>
+
+      <div class="note">
+        后台派发成功接受后，Leader 的当前回合就结束、把输入权还给你，成员继续在后台跑。跑完后它会收到一条精简通知——<strong>通知不是调度</strong>，下一步仍然要它显式调用。
+      </div>
+    </section>
+
+    <!-- ============ 05 信封 ============ -->
+    <section id="envelope" aria-labelledby="h-env">
+      <h2 id="h-env"><span class="sec-no">05</span>报告信封与任务状态</h2>
+      <p class="sub">成员怎么交差、交不成会怎样、十个状态分别归谁写。</p>
+
+      <p>成员可以写很长的正文给人看，但<strong>最后一个非空行</strong>必须是一行裸 JSON。runtime 只认这个信封，绝不从正文里猜状态。三种形状：</p>
+
+      <div class="envs">
+        <div class="env">
+          <div class="env__body">
+            <div class="env__name">execution<b>执行回报</b></div>
+            <div class="code"><pre><code>{"agent_team_report":{"type":"execution","taskId":"impl","status":"SUBMITTED","summary":"会话 TTL 迁到环境变量，默认值 30 分钟保持不变","evidence":["src/session/store.ts:42"],"requests":[]}}</code></pre></div>
+          </div>
+        </div>
+        <div class="env">
+          <div class="env__body">
+            <div class="env__name">review<b>评审判定</b></div>
+            <div class="code"><pre><code>{"agent_team_report":{"type":"review","reviewRoundId":"review-1","summary":"一处默认值仍然硬编码","evidence":["src/session/store.ts:58"],"requests":[],"decisions":[{"taskId":"impl","verdict":"FIX_REQUIRED","fix_prompt":"store.ts:58 的默认值仍是硬编码 1800，改为先读 env 再回退"}]}}</code></pre></div>
+          </div>
+        </div>
+        <div class="env">
+          <div class="env__body">
+            <div class="env__name">expert<b>只读结论</b></div>
+            <div class="code"><pre><code>{"agent_team_report":{"type":"expert","expertRoundId":"diag-1","summary":"迁移本身没问题，重复报错来自空表","evidence":["src/session/store.ts:96"],"requests":[]}}</code></pre></div>
+          </div>
+        </div>
+      </div>
+
+      <ol class="rules-list">
+        <li><strong>裸行，不加围栏。</strong>不能包在 <code>```json</code> 里，前面不留空行、后面不留注释。小模型特别容易照抄示例里的围栏。</li>
+        <li><strong>evidence 用 <code>path:line</code>。</strong>正斜杠，纯中文描述，不写「第 42 行」，不贴代码片段。</li>
+        <li><strong>summary 只写一句判定式结论。</strong>做了什么、结果数字。正文才是给人读的部分。</li>
+        <li><strong>Coder 不能自报 VERIFIED。</strong>执行信封只有两个合法状态：<code>SUBMITTED</code> 和 <code>BLOCKED</code>。</li>
+      </ol>
+
+      <h3>信封坏了会怎样</h3>
+      <p>缺失、损坏、越界、ID 对不上，一律进 <code>REPORT_INVALID</code>：正文和写锁都保留，通知 Leader，<strong>不自动重试</strong>。处理方式是拿同一个 taskId 重派一次新 attempt，让它重新核对自己的产出。连坏两次，就该考虑换人而不是继续重试。</p>
+
+      <h3>十个状态</h3>
+      <div class="table-wrap">
+        <table class="cheat">
+          <caption>任务状态机</caption>
+          <thead>
+            <tr><th>状态</th><th>意思</th><th>谁能写进去</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>PENDING</td><td>依赖还没通过，等着</td><td>runtime</td></tr>
+            <tr><td>READY</td><td>可以派工了</td><td>runtime（依赖转 VERIFIED 时）</td></tr>
+            <tr><td>RUNNING</td><td>成员正在做，写锁已上</td><td>runtime</td></tr>
+            <tr><td>SUBMITTED</td><td>交了合法的执行信封</td><td>成员</td></tr>
+            <tr><td>AUDITING</td><td>Reviewer 正在审</td><td>runtime</td></tr>
+            <tr><td>FIX_REQUIRED</td><td>要返工，fix_prompt 原样带回</td><td>Reviewer</td></tr>
+            <tr><td>BLOCKED</td><td>被中断，或成员明确说做不下去</td><td>runtime / 成员</td></tr>
+            <tr><td>REPORT_INVALID</td><td>信封不合格，正文与锁保留</td><td>runtime</td></tr>
+            <tr><td>VERIFIED</td><td>通过。依赖它的任务变 READY</td><td>只有 Reviewer</td></tr>
+            <tr><td>CANCELED</td><td>显式放弃，写锁释放</td><td>Leader 调 cancel</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ 06 上手 ============ -->
+    <section id="start" aria-labelledby="h-start">
+      <h2 id="h-start"><span class="sec-no">06</span>上手六步</h2>
+      <p class="sub">第一次用，照着这个顺序走一遍。每步下面写着「这一步该看什么」。</p>
+
+      <div class="flow">
+        <div class="flow__item">
+          <div class="flow__num">00<small>LOAD</small></div>
+          <div class="flow__body">
+            <h4>先把工具装上身</h4>
+            <p><code>agent_team</code> 是按需加载的：新会话里默认没有它。要么让主 Pi 搜一次，要么你自己敲命令。</p>
+            <div class="code">
+              <div class="code__head"><span>两种方式，任选其一</span></div>
+              <pre><code>tool_search({ query: "agent_team" })   # 模型侧检索，下一轮声明
+/team activate                         # 你自己敲，立刻声明</code></pre>
+            </div>
+            <p class="prose-note">看到工具出现在可用列表里，才继续下一步。没有它的时候直接说「用 agent_team 帮我组队」，主 Pi 会先检索。</p>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">01<small>BRIEF</small></div>
+          <div class="flow__body">
+            <h4>把目标交代清楚</h4>
+            <p>不需要背字段名，但这四件事得说到：要什么结果、哪些文件可动、怎么算通过、要不要独立评审。</p>
+            <p>缺一样，Leader 就会替你猜——而它猜出来的东西会直接写进计划，变成成员的行动依据。</p>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">02<small>GATE</small></div>
+          <div class="flow__body">
+            <h4>在确认门里看一眼计划</h4>
+            <p>第一次注册会弹一次确认（auto 关闭时）。窗口里能滚动看完整计划，<kbd>Enter</kbd> 确认、<kbd>Esc</kbd> 拒绝。只看四个地方：</p>
+            <ul>
+              <li>名册里的人<strong>够不够、对不对口</strong>——有没有该有却没有的评审者。</li>
+              <li>ownedPaths <strong>是不是具体路径</strong>——写成一个大目录就等于关掉了越界检查。</li>
+              <li>reviewerId 指向谁——它将是唯一能判过的人。</li>
+              <li>acceptance <strong>能不能判真假</strong>——「代码质量良好」判不了，「默认值不变」能判。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">03<small>RUN</small></div>
+          <div class="flow__body">
+            <h4>派工</h4>
+            <div class="code">
+              <div class="code__head"><span>单个 / 整批</span><button class="copy" type="button">复制</button></div>
+              <pre><code>agent_team({ action: "run", taskId: "impl" })
+agent_team({ action: "parallel", taskIds: ["docs", "api"] })</code></pre>
+            </div>
+            <p>派工前 runtime 会做完整预检：schema、revision、依赖、成员可用性、路径冲突。预检不过就不会有任何成员被唤醒。</p>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">04<small>REVIEW</small></div>
+          <div class="flow__body">
+            <h4>审，然后决定返工还是放行</h4>
+            <div class="code">
+              <div class="code__head"><span>一轮评审</span><button class="copy" type="button">复制</button></div>
+              <pre><code>agent_team({ action: "review", reviewRoundId: "review-1", taskIds: ["impl"] })</code></pre>
+            </div>
+            <p>拿到 <code>FIX_REQUIRED</code> 就直接 <code>run</code> 同一个 taskId，Reviewer 的原话会随包带到 Coder 面前。你不是在转述意见，是在传递原文。</p>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">05<small>WATCH</small></div>
+          <div class="flow__body">
+            <h4>想看现场就开面板</h4>
+            <div class="code">
+              <div class="code__head"><span>命令</span><button class="copy" type="button">复制</button></div>
+              <pre><code>/team open        # 唤回 Dashboard，只读，不启动任何 child
+/team status      # 成员/任务计数、当前对象、阻塞、待答请求</code></pre>
+            </div>
+            <p>协作图只显示类型和状态，不显示正文和凭据。节点上的涌动只证明运行时接受了投递，<strong>不证明对方读过，更不等于通过</strong>。面板能停、能继续、能换模型，但不能派活。</p>
+          </div>
+        </div>
+
+        <div class="flow__item">
+          <div class="flow__num">06<small>SIGN</small></div>
+          <div class="flow__body">
+            <h4>你签字，然后收尾</h4>
+            <p>Reviewer 的 <code>FINAL_VERIFY: VERIFIED</code> 只代表「Agent 证据完整」，不等于你验收。看完证据和限制后，再决定收尾。</p>
+            <div class="code">
+              <div class="code__head"><span>收尾</span><button class="copy" type="button">复制</button></div>
+              <pre><code>agent_team({ action: "close", team: "default" })</code></pre>
+            </div>
+            <p class="prose-note">非 auto 会话里，close 还会再问一次，而且这次<strong>不设倒计时</strong>——等不出来，只能明确点同意或拒绝。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 07 用法 ============ -->
+    <section id="cases" aria-labelledby="h-cases">
+      <h2 id="h-cases"><span class="sec-no">07</span>六种用法</h2>
+      <p class="sub">从最常见的开始。每种都写清：什么时候进来、怎么发、结果落在哪、有一个什么坑。</p>
+
+      <div class="cases">
+
+        <article class="case case--wide">
+          <div class="case__top">
+            <span class="case__no">01</span>
+            <h3>一个不太小的改动</h3>
+          </div>
+          <p class="case__when">最常见的一种。你有一个说得清、但一个人做完容易漏边的活：迁移配置、改一处协议、补一段状态机。想要一个动手的，加一个挑错的。</p>
+          <p class="case__roster"><b>coder</b><i>→</i><b>reviewer</b></p>
+          <div>
+              <div class="code">
+                <div class="code__head"><span>注册 + 派工 + 评审</span><button class="copy" type="button">复制</button></div>
+                <pre><code>agent_team({
+  action: "plan", team: "default",
+  plan: {
+    members: [coder, reviewer],
+    reviewerId: "reviewer",
+    tasks: [{ id: "impl",
+      memberId: "coder",
+      ownedPaths: ["src/session"] }],
+    acceptance: ["默认值不变"]
+  }
+})
+
+agent_team({ action: "run",
+  taskId: "impl" })
+
+agent_team({ action: "review",
+  reviewRoundId: "review-1",
+  taskIds: ["impl"] })</code></pre>
+              </div>
+          </div>
+          <div class="case__grid case__grid--foot">
+            <p><strong>结果落在哪：</strong>通过后任务变 <code>VERIFIED</code>，写锁释放；下游任务自动变 <code>READY</code>。不通过就拿到一条 fix_prompt，<code>run</code> 同一 taskId 再来一次。</p>
+            <p class="case__foot"><b>坑：</b>两个人是最小配置，不是可选项。<code>members</code> 少一个就直接过不了校验。<span>只有 coder 没有 reviewer，等于没有判定来源。</span></p>
+          </div>
+        </article>
+
+        <article class="case">
+          <div class="case__top">
+            <span class="case__no">02</span>
+            <h3>两件互不相干的事</h3>
+          </div>
+          <p class="case__when">两份工作既不共享文件，也不需要谁等谁。比如一个改 API、一个补文档——两个 coder，各占一条路径。</p>
+          <p class="case__roster"><b>coder</b><i>+</i><b>coder</b><i>+</i><b>reviewer</b></p>
+          <div class="code">
+            <div class="code__head"><span>并行派发</span><button class="copy" type="button">复制</button></div>
+            <pre><code>agent_team({ action: "parallel",
+  taskIds: ["api", "docs"] })</code></pre>
+          </div>
+          <p class="case__foot"><b>结果：</b>两个成员同时开工，各自独占自己的路径。<span>坑：同一名成员不能同时接两个并行任务；路径哪怕父子包含也算冲突。</span></p>
+        </article>
+
+        <article class="case">
+          <div class="case__top">
+            <span class="case__no">03</span>
+            <h3>卡住了，要人帮着看</h3>
+          </div>
+          <p class="case__when">同一个成员连续两次交不出合格结果，或者你怀疑方向本身有问题。这时候需要的是一双只读的眼睛，不是一个新任务。</p>
+          <p class="case__roster"><b>debugger</b><i>·</i><b>只读</b><i>·</i><b>不写 verdict</b></p>
+          <div class="code">
+            <div class="code__head"><span>只读专家</span><button class="copy" type="button">复制</button></div>
+            <pre><code>agent_team({
+  action: "expert",
+  expertRoundId: "diag-1",
+  expertId: "debugger",
+  taskIds: ["impl"],
+  objective: "定位同一处默认值为何连续改错"
+})</code></pre>
+          </div>
+          <p class="case__foot"><b>结果：</b>一份 expert 信封，带证据和结论，不改任务状态。<span>坑：专家必须事先在计划里批准；optimizer 只接已经 VERIFIED 的成果。</span></p>
+        </article>
+
+        <article class="case">
+          <div class="case__top">
+            <span class="case__no">04</span>
+            <h3>只想问一句</h3>
+          </div>
+          <p class="case__when">你需要一个判断，但不需要开一轮评审、更不想动任何任务。比如问 Reviewer 某个决定为什么反复出问题。</p>
+          <p class="case__roster"><b>任意已规划成员</b><i>·</i><b>空闲即可</b></p>
+          <div class="code">
+            <div class="code__head"><span>只读提问</span><button class="copy" type="button">复制</button></div>
+            <pre><code>agent_team({
+  action: "consult",
+  member: { id: "reviewer" },
+  objective: "impl 为什么连续两次交不上信封？"
+})</code></pre>
+          </div>
+          <p class="case__foot"><b>结果：</b>后台跑一轮，回来一个 expert 形状的信封，轮次 id 还叫 <code>expertRoundId</code>。任务状态前后不变。<span>坑：「只读」是契约层面的，被咨询的成员手里仍然有写工具。</span></p>
+        </article>
+
+        <article class="case">
+          <div class="case__top">
+            <span class="case__no">05</span>
+            <h3>不想每次都被确认门拦住</h3>
+          </div>
+          <p class="case__when">你已经反复跑过、信任这套流程，只想让它一口气走完。</p>
+          <div class="code">
+            <div class="code__head"><span>顺序很重要</span><button class="copy" type="button">复制</button></div>
+            <pre><code>agent_team({
+  action: "set-auto", auto: true })
+
+// 然后才发 plan</code></pre>
+          </div>
+          <p class="case__foot"><b>结果：</b>plan 门被跳过，开关持久化，新会话沿用。<span>坑：门已经弹出来之后再补 auto 是无效的，那次确认撤不回来。而且 auto 也不会替你填 VERIFIED 和 HUMAN_ACCEPT。</span></p>
+        </article>
+
+        <article class="case case--wide">
+          <div class="case__top">
+            <span class="case__no">06</span>
+            <h3>干到一半想改方向，或者想收手</h3>
+          </div>
+          <p class="case__when">成员的活还在跑，但你发现范围不对；或者你想先看看现场，再决定放不放。四个动作各管一段，别混着用。</p>
+          <p class="case__roster"><b>steer</b><i>·</i><b>pause</b><i>·</i><b>resume</b><i>·</i><b>cancel</b></p>
+          <div class="case__grid">
+            <div class="code">
+              <div class="code__head"><span>改方向 / 停</span><button class="copy" type="button">复制</button></div>
+              <pre><code>// 只对正在运行的成员
+agent_team({ action: "steer",
+  member: { id: "coder" },
+  message: "只改 src/session" })
+
+// 软中断，保留会话
+agent_team({ action: "pause",
+  taskId: "impl" })</code></pre>
+            </div>
+            <div class="code">
+              <div class="code__head"><span>继续 / 放弃</span><button class="copy" type="button">复制</button></div>
+              <pre><code>// 同一目标，新 attempt
+agent_team({ action: "resume",
+  taskId: "impl" })
+
+// 只放弃还没在跑的
+agent_team({ action: "cancel",
+  taskIds: ["dropped"] })</code></pre>
+            </div>
+          </div>
+          <p class="case__foot"><b>结果：</b>pause 后成员记为 INTERRUPTED、任务记为 BLOCKED 且不重放；resume 走完整的重新派发预检。<span>坑：cancel 撤不回 RUNNING；已经在审的任务要先走完评审循环。</span></p>
+        </article>
+
+      </div>
+
+      <h3>还有两个高频小动作</h3>
+      <div class="split">
+        <div class="panel">
+          <h4>换模型</h4>
+          <ul>
+            <li><span>只允许空闲成员</span><span>先 stop</span></li>
+            <li><span>网页切换不追问</span><span>Leader 要确认</span></li>
+            <li><span>首轮核对模型</span><span>不符即失败</span></li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h4>回答成员的提问</h4>
+          <ul>
+            <li><span>成员上行 leader</span><span>登记为请求</span></li>
+            <li><span>steer 实时回</span><span>运行中</span></li>
+            <li><span>answer-request</span><span>下次派发注入</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 08 坑 ============ -->
+    <section id="pitfalls" aria-labelledby="h-pit">
+      <h2 id="h-pit"><span class="sec-no">08</span>六个坑</h2>
+      <p class="sub">按踩中的频率排序。前两个几乎每个新手都会撞一次。</p>
+
+      <ol class="pitfalls">
+        <li class="pitfall">
+          <div>
+            <h4>把信封包进了代码围栏</h4>
+            <p>成员用 Markdown 代码块把 JSON 包起来，runtime 不认，直接 <code>REPORT_INVALID</code>。要的是最后一个非空行、裸的单行 JSON，不加围栏、不缩进成块。小模型尤其容易照抄示例里的围栏，所以示例里一个都不写。</p>
+          </div>
+        </li>
+        <li class="pitfall">
+          <div>
+            <h4>以为改 instructions 就能纠正成员</h4>
+            <p>会话按 Session 复用。改了角色书，旧历史仍然主导输出，重发同一个提示词大概率复现同一个错误。<code>kill</code> 掉、用 amendment 加一名替补，才是干净的做法。</p>
+          </div>
+        </li>
+        <li class="pitfall">
+          <div>
+            <h4>让同一名成员同时接两个并行任务</h4>
+            <p>parallel 要求同批成员互异。两条任务挂同一个成员时，第二批会被拒——不是 bug，是因为一个人不能同时在两个地方改代码。</p>
+          </div>
+        </li>
+        <li class="pitfall">
+          <div>
+            <h4>把 ownedPaths 当成沙箱</h4>
+            <p>它只是声明。成员同账号、带 bash，越过路径照样能写。<strong>实际防线只有事后 <code>git status</code> 比对的一条告警</strong>：不回滚、不阻断，非 git 工作区还检测不到。真要隔离，得靠 OS 级沙箱，这层目前没有。</p>
+          </div>
+        </li>
+        <li class="pitfall">
+          <div>
+            <h4>确认门弹出来之后才想起开 auto</h4>
+            <p>顺序错了。门一旦弹出，那一次确认就必须由你处理；此时再 <code>set-auto</code> 只能影响下一次。想要全自动，先开关再发 plan。</p>
+          </div>
+        </li>
+        <li class="pitfall">
+          <div>
+            <h4>想删掉一个没用的成员</h4>
+            <p>名册只增不减。换方向靠改任务、改授权、加替补，不能删。所以加人之前那句「为什么现有成员盖不住」值得认真回答——它决定的是长期成本。</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============ 09 速查 ============ -->
+    <section id="cheat" aria-labelledby="h-cheat">
+      <h2 id="h-cheat"><span class="sec-no">09</span>速查表</h2>
+      <p class="sub">所有动作都在 <code>agent_team({ action, ... })</code> 里。一个动作只接自己的字段，混着传会报错。</p>
+
+      <div class="table-wrap">
+        <table class="cheat">
+          <caption>动作 · 作用 · 前提</caption>
+          <thead>
+            <tr><th>动作</th><th>作用</th><th>前提 / 限制</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>plan</td><td>注册或修订整份计划</td><td>修订要带实时 expectedRevision；可先 validateOnly 预检</td></tr>
+            <tr><td>run</td><td>启动一个任务的新 attempt</td><td>READY / FIX_REQUIRED / 显式恢复</td></tr>
+            <tr><td>parallel</td><td>一次派一整批</td><td>成员互异、依赖已过、路径不冲突，≤ 8</td></tr>
+            <tr><td>review</td><td>让 Reviewer 判定</td><td>只收 SUBMITTED</td></tr>
+            <tr><td>expert</td><td>只读专家结论</td><td>须预批准；optimizer 只接 VERIFIED</td></tr>
+            <tr><td>consult</td><td>向任意空闲成员只读提问</td><td>不绑任务，不改状态</td></tr>
+            <tr><td>steer</td><td>给正在运行的成员塞一句话</td><td>只对运行中成员</td></tr>
+            <tr><td>pause</td><td>软中断，保留会话与授权</td><td>成员记 INTERRUPTED，任务记 BLOCKED</td></tr>
+            <tr><td>resume</td><td>同一目标开新 attempt</td><td>给 taskId / reviewRoundId / expertRoundId 之一</td></tr>
+            <tr><td>cancel</td><td>放弃任务并释放写锁</td><td>只对未在跑的任务；下游级联取消</td></tr>
+            <tr><td>answer-request</td><td>答复成员上行的请求</td><td>只接 OPEN；下次派发注入</td></tr>
+            <tr><td>status</td><td>看成员、任务、阻塞、请求</td><td>默认精简；full:true 才给全量</td></tr>
+            <tr><td>wait</td><td>显式收完整结果</td><td>—</td></tr>
+            <tr><td>stop / kill</td><td>软中断 / 终止 child</td><td>都保留 Session 与授权</td></tr>
+            <tr><td>set-model</td><td>换模型或思考程度</td><td>只允许空闲成员</td></tr>
+            <tr><td>set-auto</td><td>开关自动授权</td><td>持久化；先开再 plan</td></tr>
+            <tr><td>close</td><td>验收后整队收尾</td><td>非 auto 会话会再问一次，无倒计时</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <table class="cheat">
+          <caption>斜杠命令</caption>
+          <thead>
+            <tr><th>命令</th><th>作用</th><th>注意</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>/team</td><td>等价于 status</td><td>省略子命令时的默认</td></tr>
+            <tr><td>/team status</td><td>成员、任务与 child 会话</td><td>可加 teamId、memberId</td></tr>
+            <tr><td>/team open</td><td>只读打开 Dashboard</td><td>不启动 child、不重发提示</td></tr>
+            <tr><td>/team stop</td><td>软停止成员</td><td>省略 member 停全队</td></tr>
+            <tr><td>/team auto on|off</td><td>持久化自动授权开关</td><td>省略参数只显示当前值</td></tr>
+            <tr><td>/team close</td><td>人工验收后收尾</td><td>非自动动作</td></tr>
+            <tr><td>/team doctor</td><td>无模型核对 RPC 与恢复</td><td>排查环境问题</td></tr>
+            <tr><td>/team activate</td><td>把工具加进当前会话</td><td>新会话没有 agent_team 时</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note note--cool">
+        <strong>一句话记住这套东西的形状：</strong>你签字，Leader 点下一步，成员交信封，runtime 记账。任何一环想替别人做主，都会在状态里留下痕迹。
+      </div>
+    </section>
+
+    <footer>
+      <p>依据本机 <code>pi-agent-orchestrator</code> 扩展的实际实现整理：操作手册、README、schema 与 runtime 状态枚举。字段名、状态名、动作签名均按源码核对；示意块（授权地图）已标注为形状而非字面。</p>
+      <span class="src">skills/pi-agent-team/SKILL.md · README.md · schema.ts · runtime.ts:135-146 · index.ts:216</span>
+      <p class="end">2026 年 11 月 · 深夜书屋整理</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  var progress = document.getElementById('progress');
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  var sections = links.map(function (a) {
+    return document.querySelector(a.getAttribute('href'));
+  }).filter(Boolean);
+
+  function onScroll() {
+    var doc = document.documentElement;
+    var max = doc.scrollHeight - window.innerHeight;
+    var ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+    if (progress) progress.style.width = (ratio * 100).toFixed(2) + '%';
+
+    var current = null;
+    for (var i = 0; i < sections.length; i++) {
+      var top = sections[i].getBoundingClientRect().top;
+      if (top <= 120) current = i;
+    }
+    links.forEach(function (a, i) {
+      if (i === current) a.classList.add('is-active');
+      else a.classList.remove('is-active');
+    });
+  }
+
+  var ticking = false;
+  window.addEventListener('scroll', function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () {
+      onScroll();
+      ticking = false;
+    });
+  }, { passive: true });
+  onScroll();
+
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var block = btn.closest('.code');
+      var pre = block ? block.querySelector('pre') : null;
+      if (!pre) return;
+      var text = pre.innerText;
+      var done = function () {
+        btn.textContent = '已复制';
+        btn.classList.add('is-done');
+        window.setTimeout(function () {
+          btn.textContent = '复制';
+          btn.classList.remove('is-done');
+        }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function () { fallback(text, done); });
+      } else {
+        fallback(text, done);
+      }
+    });
+  });
+
+  function fallback(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* 留空：复制失败不做事 */ }
+    document.body.removeChild(ta);
+  }
+})();
+</script>
+</body>
+</html>
