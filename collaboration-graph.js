@@ -25,8 +25,8 @@
 	var KINDS = { dispatch: "派发", steer: "引导", report: "回报", question: "提问", answer: "回答", message: "留言", request_answer: "应答" };
 	var DELIVERY = { QUEUED: "排队", ACCEPTED: "已接受", DELIVERED: "已投递", SUBMITTED: "已提交", READY: "结果就绪", FAILED: "失败", CANCELED: "已取消", INTERRUPTED: "已中断", REPORT_INVALID: "格式错误" };
 	var SENT = { ACCEPTED: true, DELIVERED: true, SUBMITTED: true, READY: true };
-	/* 涌动：固定空间周期（dasharray 42+198=240px）与统一时长，所有路径速度一致，
-	 * 相位由脚本写入的负 animation-delay 对齐到同一时钟；dasharray 与 keyframes 的 240 必须同步。 */
+	/* 涌动：固定空间周期（dasharray 28+212=240px）与统一时长，所有路径速度一致，
+	 * 相位由脚本写入的负 animation-delay 对齐到同一时钟；各层 dasharray 与 keyframes 的 240 周期必须同步。 */
 	var CSS = `
 .cg-root { --cg-paper:rgb(255 255 255 / .5); --cg-ink:var(--ink,#13211b); --cg-soft:var(--ink-soft,#3d5348); --cg-rule:var(--rule,rgb(20 60 45 / .14)); --cg-blue:var(--accent-ink,#12543a); --cg-warn:var(--warn-ink,#8a5a1e); --cg-red:var(--status-error-ink,#a33732); --cg-green:var(--status-settled-ink,#1d7a56); --cg-rail-idle:var(--status-idle-line,var(--cg-rule)); --cg-rail-run:var(--status-running-line,var(--cg-blue)); --cg-rail-warn:var(--status-starting-line,var(--cg-warn)); --cg-rail-error:var(--status-error-line,var(--cg-red)); --cg-rail-settled:var(--status-settled-line,var(--cg-green)); --cg-flow:var(--status-running-ink,var(--cg-blue)); --cg-ribbon:rgb(18 84 58 / .12); --cg-ribbon-live:rgb(18 84 58 / .34); position:relative; color:var(--cg-ink); font-family:var(--font-body,system-ui,sans-serif); min-width:0; border:1px solid rgb(255 255 255 / .6); border-radius:8px; overflow:hidden; }
 .cg-root * { box-sizing:border-box; }
@@ -70,44 +70,61 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 .cg-stat { display:flex; flex:0 0 auto; gap:4px; align-items:baseline; white-space:nowrap; }
 .cg-stat b { font-weight:650; font-size:13px; color:#fff; font-variant-numeric:tabular-nums; }
 .cg-team { position:absolute; font-size:12px; font-weight:650; color:var(--cg-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-/* 归属线：填充丝带（源头宽、末端窄），不用描边，避免与关系线抢质地。 */
-.cg-ribbon { fill:var(--cg-ribbon); stroke:none; }
-.cg-ribbon[data-live="true"] { fill:var(--cg-ribbon-live); }
-.cg-edge { stroke:var(--cg-blue); stroke-width:1.7; stroke-linejoin:round; fill:none; }
+/* 归属光带：4px 半透明带，与关系线及流光共轨，两端由脚本按自身走向渐隐。 */
+.cg-ribbon { fill:none; stroke:var(--cg-ribbon); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
+.cg-ribbon[data-live="true"] { stroke:var(--cg-ribbon-live); stroke-width:4; }
+.cg-edge { stroke:var(--cg-blue); stroke-width:1.1; stroke-linecap:round; stroke-linejoin:round; fill:none; }
 .cg-edge[data-status="QUEUED"] { stroke:var(--cg-warn); stroke-dasharray:5 5; }
 .cg-edge[data-status="FAILED"] { stroke:var(--cg-red); }
 .cg-edge[data-status="CANCELED"],.cg-edge[data-status="INTERRUPTED"] { stroke:var(--cg-soft); stroke-dasharray:3 5; }
-/* 涌动：固定空间周期（42+198=240px）与同一时长，所有路径速度一致；
- * 相位由脚本写入的负 animation-delay 对齐到同一时钟，并行成员步调一致。
- * dasharray 的 240 与 keyframes 的 240 必须同步。 */
-.cg-flow { fill:none; stroke:var(--cg-flow); stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:42 198; stroke-dashoffset:0; stroke-opacity:0; }
-.cg-flow[data-active="true"] { stroke-opacity:.72; animation:cg-wave 1450ms linear infinite; }
-.cg-flow[data-burst="true"] { stroke-width:3.6; stroke-opacity:1; animation:cg-wave 480ms linear 3; }
-.cg-flow[data-muted="true"] { stroke-opacity:0; }
-.cg-root[data-motion="off"] .cg-flow { animation:none; stroke-opacity:0; }
+/* 涌动：借鉴 uiverse.io/loaders/G27XLEO_spotty-chipmunk-84.html 双层同轨光点微晕、
+ * uiverse.io/loaders/Z4drus_cowardly-deer-31.html 短脉冲同轴滑行轨迹与
+ * uiverse.io/loaders/PhilibertGentien_smart-pug-99.html 渐变弧段结构。
+ * 三层共享 240px 空间周期与 1450ms 统一时长，相位由负 animation-delay 对齐到同一时钟；
+ * 柔光层（12+228）与白瓷头粒子（2+238）分别前移 16px / 26px 精准锁定在 28px 主流光前端。 */
+.cg-flow-glow { fill:none; stroke:var(--cg-flow); stroke-width:5.8; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:12 228; stroke-dashoffset:224; stroke-opacity:0; }
+.cg-flow { fill:none; stroke:var(--cg-flow); stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:28 212; stroke-dashoffset:0; stroke-opacity:0; }
+.cg-flow-head { fill:none; stroke:var(--cg-flow); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:2 238; stroke-dashoffset:214; stroke-opacity:0; }
+.cg-flow[data-active="true"] { stroke-opacity:.82; animation:cg-wave 1450ms linear infinite; }
+.cg-flow-glow[data-active="true"] { stroke-opacity:.2; animation:cg-wave-glow 1450ms linear infinite; }
+.cg-flow-head[data-active="true"] { stroke-opacity:.96; animation:cg-wave-head 1450ms linear infinite; }
+.cg-flow[data-burst="true"] { stroke-width:3; stroke-opacity:1; animation:cg-wave 480ms linear 3; }
+.cg-flow-glow[data-burst="true"] { stroke-width:5.8; stroke-opacity:.3; animation:cg-wave-glow 480ms linear 3; }
+.cg-flow-head[data-burst="true"] { stroke-width:3.6; stroke-opacity:1; animation:cg-wave-head 480ms linear 3; }
+.cg-flow[data-muted="true"],.cg-flow-glow[data-muted="true"],.cg-flow-head[data-muted="true"] { stroke-opacity:0; }
+.cg-root[data-motion="off"] .cg-flow,.cg-root[data-motion="off"] .cg-flow-glow,.cg-root[data-motion="off"] .cg-flow-head { animation:none; stroke-opacity:0; }
 @keyframes cg-wave { from { stroke-dashoffset:240; } to { stroke-dashoffset:0; } }
-.cg-arrow { fill:var(--cg-blue); }
+@keyframes cg-wave-glow { from { stroke-dashoffset:224; } to { stroke-dashoffset:-16; } }
+@keyframes cg-wave-head { from { stroke-dashoffset:214; } to { stroke-dashoffset:-26; } }
+/* 端子收到 0：光带直接贴到卡边，卡缘不再挂圆点。 */
+.cg-port { r:0; fill:var(--cg-paper); stroke:var(--cg-ribbon-live); stroke-width:1.25; }
+.cg-port[data-live="true"] { fill:var(--cg-flow); stroke:var(--cg-flow); }
+/* 方向交给涌动本身；箭头元素留着承载状态色，只是不画出来。 */
+.cg-arrow { fill:var(--cg-blue); visibility:hidden; }
 .cg-arrow[data-status="QUEUED"] { fill:var(--cg-warn); }
 .cg-arrow[data-status="FAILED"] { fill:var(--cg-red); }
 .cg-arrow[data-status="CANCELED"],.cg-arrow[data-status="INTERRUPTED"] { fill:var(--cg-soft); }
-.cg-edge-label { position:absolute; z-index:3; padding:3px 7px; background:var(--cg-paper); border:1px solid var(--cg-rule); border-radius:4px; color:var(--cg-blue); font-size:11px; white-space:nowrap; pointer-events:none; }
+/* 标签不再是胶囊：无边框小字压在一道径向软晕上，线经过字时被吃掉，既不断字也不露框。 */
+.cg-edge-label { position:absolute; z-index:3; padding:0 12px; background:radial-gradient(150% 130% at 50% 50%, rgb(10 11 14 / 0.92) 34%, rgb(10 11 14 / 0) 100%); border:0; border-radius:0; color:var(--cg-blue); font-size:11px; line-height:1.45; white-space:nowrap; pointer-events:none; }
 .cg-edge-label[data-status="QUEUED"] { color:var(--cg-warn); }
 .cg-edge-label[data-status="FAILED"] { color:var(--cg-red); }
-.cg-ribbon[data-muted="true"],.cg-edge[data-muted="true"],.cg-arrow[data-muted="true"] { opacity:.15; }
-.cg-ribbon[data-hidden="true"] { fill-opacity:0; }
+.cg-ribbon[data-muted="true"],.cg-edge[data-muted="true"],.cg-arrow[data-muted="true"],.cg-port[data-muted="true"] { opacity:.15; }
+.cg-ribbon[data-hidden="true"] { stroke-opacity:0; }
+.cg-root [data-secondary="true"] { opacity:.72; }
+.cg-root .cg-port[data-hidden="true"] { opacity:0; }
 .cg-edge-label[data-muted="true"] { opacity:.25; }
 .cg-legend { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px; padding:11px 16px; border-top:1px solid var(--cg-rule); background:var(--cg-paper); font-size:12px; color:var(--cg-soft); }
 .cg-legend span { display:flex; gap:6px; align-items:center; }
 .cg-legend i { display:inline-block; width:22px; height:0; border-top:2px solid var(--cg-rule); }
-.cg-legend .cg-legend-base { border-top:0; height:5px; border-radius:3px; background:var(--cg-ribbon-live); }
+.cg-legend .cg-legend-base { border-top:0; height:3px; border-radius:2px; background:linear-gradient(90deg,transparent,var(--cg-ribbon-live) 50%,transparent); }
 .cg-legend .cg-legend-flow { border-top-width:0; height:3px; border-radius:2px; background:linear-gradient(90deg,transparent,var(--cg-flow) 50%,transparent); }
-.cg-legend .cg-legend-message { border-color:var(--cg-blue); }
+.cg-legend .cg-legend-message { border-top-width:1.5px; border-color:var(--cg-blue); }
 .cg-legend .cg-legend-queued { border-color:var(--cg-warn); border-top-style:dashed; }
 .cg-legend .cg-legend-failed { border-color:var(--cg-red); }
 .cg-hidden { color:var(--cg-soft); }
 .cg-offline { margin-left:auto; color:var(--cg-warn); }
 .cg-empty { position:absolute; color:var(--cg-soft); font-size:14px; padding:18px; }
-@media(prefers-reduced-motion:reduce) { .cg-node { transition:none; } .cg-flow { animation:none; stroke-opacity:0; } }
+@media(prefers-reduced-motion:reduce) { .cg-node { transition:none; } .cg-flow,.cg-flow-glow,.cg-flow-head { animation:none; stroke-opacity:0; } }
 `;
 
 	function status(value) {
@@ -124,37 +141,46 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		var c1 = [a[0] + bulge, a[1]], c2 = [b[0] + bulge, b[1]], mt = 1 - t;
 		return [mt * mt * mt * a[0] + 3 * mt * mt * t * c1[0] + 3 * mt * t * t * c2[0] + t * t * t * b[0], mt * mt * mt * a[1] + 3 * mt * mt * t * c1[1] + 3 * mt * t * t * c2[1] + t * t * t * b[1]];
 	}
-	/* 箭头按真实切线画，竖向的同伴连线也能指对方向。 */
+	/* 箭头按真实切线画，使用小巧锐利的燕尾窄角箭头，竖向同伴连线也能指对方向。 */
 	function arrowMarks(tip, near) {
 		var ux = tip[0] - near[0], uy = tip[1] - near[1], len = Math.sqrt(ux * ux + uy * uy) || 1;
 		ux /= len; uy /= len;
-		var bx = tip[0] - ux * 8, by = tip[1] - uy * 8, px = -uy * 4.2, py = ux * 4.2;
-		return tip[0] + "," + tip[1] + " " + (bx + px) + "," + (by + py) + " " + (bx - px) + "," + (by - py);
+		var bx = tip[0] - ux * 7.2, by = tip[1] - uy * 7.2, nx = tip[0] - ux * 5.2, ny = tip[1] - uy * 5.2, px = -uy * 2.8, py = ux * 2.8;
+		return tip[0].toFixed(1) + "," + tip[1].toFixed(1) + " " + (bx + px).toFixed(1) + "," + (by + py).toFixed(1) + " " + nx.toFixed(1) + "," + ny.toFixed(1) + " " + (bx - px).toFixed(1) + "," + (by - py).toFixed(1);
 	}
-	/* 丝带几何：起止点之间一条三次贝塞尔，lane 只改控制点，曲线自然拉开成束。 */
-	function curveReach(a, b) { return Math.max(70, Math.abs(b[0] - a[0]) * 0.5); }
+	/* 同轴 S 型水平切线三次贝塞尔：C1 = [a.x + reach * dir, a.y], C2 = [b.x - reach * dir, b.y]，
+	 * 两端严格水平切线进出卡片，C1 连续无反弓扭曲。 */
+	function curveReach(a, b) { return Math.max(48, Math.abs(b[0] - a[0]) * 0.48); }
 	function curveDirection(a, b) { return b[0] >= a[0] ? 1 : -1; }
-	function curveData(a, b, off) {
+	function curveData(a, b) {
 		var dir = curveDirection(a, b), reach = curveReach(a, b);
-		return "M" + a[0] + " " + a[1] + " C" + (a[0] + reach * dir) + " " + (a[1] + off) + " " + (b[0] - reach * dir) + " " + (b[1] + off) + " " + b[0] + " " + b[1];
+		return "M" + a[0] + " " + a[1] + " C" + (a[0] + reach * dir) + " " + a[1] + " " + (b[0] - reach * dir) + " " + b[1] + " " + b[0] + " " + b[1];
 	}
-	function cubicAt(a, b, off, t) {
-		var dir = curveDirection(a, b), reach = curveReach(a, b), c1 = [a[0] + reach * dir, a[1] + off], c2 = [b[0] - reach * dir, b[1] + off], mt = 1 - t;
+	function cubicAt(a, b, t) {
+		var dir = curveDirection(a, b), reach = curveReach(a, b), c1 = [a[0] + reach * dir, a[1]], c2 = [b[0] - reach * dir, b[1]], mt = 1 - t;
 		return [mt * mt * mt * a[0] + 3 * mt * mt * t * c1[0] + 3 * mt * t * t * c2[0] + t * t * t * b[0], mt * mt * mt * a[1] + 3 * mt * mt * t * c1[1] + 3 * mt * t * t * c2[1] + t * t * t * b[1]];
 	}
-	/* 按法线向两侧撑开中线：源头 2.8px 收到末端 1px，读作一根拉紧的丝带。 */
-	function ribbonData(a, b, off) {
-		var steps = 26, left = [], right = [], i;
-		for (i = 0; i <= steps; i++) {
-			var t = i / steps, p = cubicAt(a, b, off, t), before = cubicAt(a, b, off, Math.max(0, t - 0.05)), after = cubicAt(a, b, off, Math.min(1, t + 0.05));
-			var tx = after[0] - before[0], ty = after[1] - before[1], len = Math.sqrt(tx * tx + ty * ty) || 1, w = 2.8 - 1.8 * t;
-			left.push([(p[0] - ty / len * w).toFixed(1), (p[1] + tx / len * w).toFixed(1)]);
-			right.push([(p[0] + ty / len * w).toFixed(1), (p[1] - tx / len * w).toFixed(1)]);
-		}
-		var d = "M" + left[0].join(" ");
-		for (i = 1; i < left.length; i++) d += " L" + left[i].join(" ");
-		for (i = right.length - 1; i >= 0; i--) d += " L" + right[i].join(" ");
-		return d + " Z";
+	/* 归属底轨与通信轨同轴同曲线（stroke 描边），以 M <startX> <startY> 开头，不再另画偏移轮廓。 */
+	function ribbonData(a, b) {
+		return curveData(a, b);
+	}
+	/* 沿弦渐隐：光带两端各收 26px，线在卡边不会一刀截断。用的是 mask，不改几何、不改 stroke，
+	 * 所以 d 与状态配色都原样；角度按两端连线取，陡峭的长弧中段才不会被横向遮罩吃掉。
+	 * 收边距离取定值而不是百分比：短线上按百分比扣会扣掉一大半，看起来像没接到卡片。 */
+	function taperMask(a, b) {
+		var dx = b[0] - a[0], dy = b[1] - a[1];
+		var chord = Math.sqrt(dx * dx + dy * dy);
+		if (!chord || !isFinite(chord)) return "";
+		var pct = Math.max(8, Math.min(26, Math.round(2600 / chord)));
+		var deg = Math.atan2(dx, -dy) * 180 / Math.PI;
+		return "linear-gradient(" + deg.toFixed(1) + "deg, transparent 0%, #000 " + pct + "%, #000 " + (100 - pct) + "%, transparent 100%)";
+	}
+	function applyTaper(element, a, b) {
+		if (!element || !element.style) return;
+		var mask = taperMask(a, b);
+		if (!mask) return;
+		element.style.maskImage = mask;
+		element.style.webkitMaskImage = mask;
 	}
 
 	/* 纯函数：输入容器宽与未缩放的图宽，输出 clamp(容器宽 / 图宽, 0.75, 1)，无副作用。
@@ -214,9 +240,20 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		function el(tag, cls, content) { var n = doc.createElement(tag); if (cls) n.className = cls; if (content != null) n.textContent = content; return n; }
 		function svg(tag, cls) { var n = doc.createElementNS(SVG, tag); if (cls) n.setAttribute("class", cls); return n; }
 		var shell = el("section", "cg-root"), style = el("style"), scroll = el("div", "cg-scroll"), frame = el("div", "cg-frame"), canvas = el("div", "cg-canvas"), lines = svg("svg", "cg-lines");
-		/* 五层固定分组：静态归属线 → 常驻涌动 → 通信关系 → 投递脉冲 → 箭头。DOM 顺序即绘制顺序。 */
-		var gBases = svg("g", "cg-layer"), gFlows = svg("g", "cg-layer"), gEdges = svg("g", "cg-layer"), gBursts = svg("g", "cg-layer"), gHeads = svg("g", "cg-layer");
-		[gBases, gFlows, gEdges, gBursts, gHeads].forEach(function (g) { lines.appendChild(g); });
+		/* uiverse.io/loaders/G27XLEO_spotty-chipmunk-84.html 柔光模糊滤镜，纯中性白瓷光晕；
+		 * 使用 userSpaceOnUse 并在 layout() 同步画布包围区域，防止严格水平路径（height===0）在浏览器中被 objectBoundingBox 裁为空图。 */
+		var defs = svg("defs"), glowFilter = svg("filter"), glowBlur = svg("feGaussianBlur");
+		glowFilter.setAttribute("id", "cg-platinum-glow");
+		glowFilter.setAttribute("filterUnits", "userSpaceOnUse");
+		glowFilter.setAttribute("x", "-24"); glowFilter.setAttribute("y", "-24");
+		glowFilter.setAttribute("width", "1028"); glowFilter.setAttribute("height", "488");
+		glowBlur.setAttribute("stdDeviation", "1.6");
+		glowFilter.appendChild(glowBlur); defs.appendChild(glowFilter); lines.appendChild(defs);
+		/* 九层固定分组：节点层（归属轨/锚点 → 柔光晕 → 常驻流光 → 头粒子）与边层（通信关系 → 脉冲柔光 → 脉冲主束 → 脉冲头粒子 → 箭头）分离，重排不误删边脉冲。 */
+		var gBases = svg("g", "cg-layer"), gFlowGlows = svg("g", "cg-layer"), gFlows = svg("g", "cg-layer"), gFlowHeads = svg("g", "cg-layer"), gEdges = svg("g", "cg-layer"), gBurstGlows = svg("g", "cg-layer"), gBursts = svg("g", "cg-layer"), gBurstHeads = svg("g", "cg-layer"), gHeads = svg("g", "cg-layer");
+		gFlowGlows.setAttribute("filter", "url(#cg-platinum-glow)");
+		gBurstGlows.setAttribute("filter", "url(#cg-platinum-glow)");
+		[gBases, gFlowGlows, gFlows, gFlowHeads, gEdges, gBurstGlows, gBursts, gBurstHeads, gHeads].forEach(function (g) { lines.appendChild(g); });
 		function clearGroup(g) { while (g.firstChild) g.firstChild.remove(); }
 		style.nonce = opts.nonce || (doc.currentScript && doc.currentScript.nonce) || "";
 		style.textContent = CSS;
@@ -246,7 +283,7 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			button.dataset.key = key;
 			if (!isLeader) { button.type = "button"; button.setAttribute("aria-pressed", "false"); button.addEventListener("click", function () { setSelected(key); if (opts.onSelect) opts.onSelect(key); }); }
 			canvas.appendChild(button);
-			return { key: key, element: button, name: name, badge: badge, role: role, action: action, rail: rail, stats: stats, statValues: statValues, raw: {}, box: null, bases: [], flow: null };
+			return { key: key, element: button, name: name, badge: badge, role: role, action: action, rail: rail, stats: stats, statValues: statValues, raw: {}, box: null, bases: [], ports: [], flow: null, flowGlow: null, flowHead: null };
 		}
 		var main = makeNode("@leader", true), empty = el("div", "cg-empty", "暂无成员。注册团队后在此显示。");
 		canvas.appendChild(empty);
@@ -368,9 +405,11 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			canvas.style.width = geometry.width + "px"; canvas.style.height = height + "px";
 			lines.setAttribute("width", String(geometry.width)); lines.setAttribute("height", String(height));
 			lines.setAttribute("viewBox", "0 0 " + geometry.width + " " + height);
+			glowFilter.setAttribute("x", "-24"); glowFilter.setAttribute("y", "-24");
+			glowFilter.setAttribute("width", String(geometry.width + 48)); glowFilter.setAttribute("height", String(height + 48));
 			Object.assign(empty.style, { left: memberX + "px", top: "60px" });
-			clearGroup(gBases); clearGroup(gFlows);
-			nodes.forEach(function (n) { n.bases = []; n.flow = null; });
+			clearGroup(gBases); clearGroup(gFlowGlows); clearGroup(gFlows); clearGroup(gFlowHeads);
+			nodes.forEach(function (n) { n.bases = []; n.ports = []; n.flow = null; n.flowGlow = null; n.flowHead = null; });
 			applyLanes();
 			nodes.forEach(function (n, nodeKey) { buildNode(nodeKey, n); paintNode(nodeKey, n); });
 			renderEdges(); syncFlows(); applySelection();
@@ -404,25 +443,37 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 		function buildNode(key, n) {
 			if (n.flow) return;
 			n.base = svg("path", "cg-ribbon"); n.base.dataset.key = key;
+			n.portStart = svg("circle", "cg-port"); n.portStart.setAttribute("r", "2.2"); n.portStart.dataset.key = key;
+			n.portEnd = svg("circle", "cg-port"); n.portEnd.setAttribute("r", "2.2"); n.portEnd.dataset.key = key;
 			n.bases = [n.base];
+			n.ports = [n.portStart, n.portEnd];
+			n.flowGlow = svg("path", "cg-flow-glow"); n.flowGlow.dataset.key = key;
 			n.flow = svg("path", "cg-flow"); n.flow.dataset.key = key;
-			gBases.appendChild(n.base); gFlows.appendChild(n.flow);
+			n.flowHead = svg("path", "cg-flow-head"); n.flowHead.dataset.key = key;
+			gBases.appendChild(n.base); gBases.appendChild(n.portStart); gBases.appendChild(n.portEnd);
+			gFlowGlows.appendChild(n.flowGlow); gFlows.appendChild(n.flow); gFlowHeads.appendChild(n.flowHead);
 		}
 		function paintNode(key, n) {
 			if (!n.flow || !geometry) return;
 			var points = route("@leader", key, 0);
 			if (!points) return;
-			var shift = laneShift(key), a = [points[0][0], points[0][1] + shift * 0.45], b = points[points.length - 1], off = shift * 1.6;
-			n.base.setAttribute("d", ribbonData(a, b, off));
-			n.flow.setAttribute("d", curveData(a, b, off));
+			var a = points[0], b = points[points.length - 1];
+			var d = ribbonData(a, b);
+			n.base.setAttribute("d", d);
+			applyTaper(n.base, a, b);
+			n.flowGlow.setAttribute("d", d);
+			n.flow.setAttribute("d", d);
+			n.flowHead.setAttribute("d", d);
+			n.portStart.setAttribute("cx", String(a[0])); n.portStart.setAttribute("cy", String(a[1]));
+			n.portEnd.setAttribute("cx", String(b[0])); n.portEnd.setAttribute("cy", String(b[1]));
 		}
 		function route(from, to, lane) {
 			var a = from === "@leader" ? main : nodes.get(from), b = to === "@leader" ? main : nodes.get(to);
 			if (!a || !b || !a.box || !b.box) return null;
 			var ab = a.box, bb = b.box, ay = ab.y + ab.height / 2, by = bb.y + bb.height / 2;
-			/* 曲线只用到首尾两点；中间点仍给箭头方向与标签定位用。 */
+			/* 主从沿用各自在主卡右缘的独立锚点（leaderAnchor）与成员左缘中点（by），两端水平切线进出。 */
 			if (from === "@leader") { var x = geometry.trunk + laneShift(to), sy = leaderAnchor(to) ?? ay; return [[ab.x + ab.width, sy], [x, sy], [x, by], [bb.x, by]]; }
-			if (to === "@leader") { var rx = geometry.trunk - 22 - laneShift(from), ty = leaderAnchor(from) ?? ay; return [[ab.x, ay], [rx, ay], [rx, by], [bb.x + bb.width, ty]]; }
+			if (to === "@leader") { var rx = geometry.trunk - 22 - laneShift(from), ty = leaderAnchor(from) ?? by; return [[ab.x, ay], [rx, ay], [rx, by], [bb.x + bb.width, ty]]; }
 			/* 同伴：只给两端卡片右缘，曲率由 bulgeData 向外撑开。 */
 			return [[ab.x + ab.width, ay + 12], [bb.x + bb.width, by - 12]];
 		}
@@ -450,35 +501,43 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			edges.forEach(function (e) {
 				if (!e.labelPos) return;
 				var width = e.label.offsetWidth || 96, height = e.label.offsetHeight || 22;
-				/* 标签不能跑出画布：窄画布下斜着的那几个字符会被 overflow:hidden 吃掉。 */
-				var maxX = Math.max(4, geometry.width - width - 4), maxY = Math.max(4, geometry.height - height - 4);
-				placed.push({ e: e, width: width, height: height, maxY: maxY, x: Math.min(maxX, Math.max(4, e.labelPos.x)), y: Math.min(maxY, Math.max(4, e.labelPos.y)), center: e.labelPos.center });
+				var centerX = !!e.labelPos.centerX;
+				/* 标签不能跑出画布：居中标签按 [x - width/2, x + width/2] 算碰撞与安全边距。 */
+				var minLeft = 4, maxLeft = Math.max(4, geometry.width - width - 4), maxY = Math.max(4, geometry.height - height - 4);
+				var rawLeft = centerX ? e.labelPos.x - width / 2 : e.labelPos.x;
+				var clampedLeft = Math.min(maxLeft, Math.max(minLeft, rawLeft));
+				placed.push({ e: e, width: width, height: height, maxY: maxY, x: clampedLeft, y: Math.min(maxY, Math.max(4, e.labelPos.y)), center: e.labelPos.center, centerX: centerX });
 			});
 			placed.sort(function (a, b) { return a.y - b.y; });
 			var settled = [];
 			placed.forEach(function (item) {
 				var guard = 0;
 				while (guard++ < 12 && settled.some(function (other) {
-					return Math.abs(other.y - item.y) < (other.height + item.height) / 2 + 2 && item.x < other.x + other.width + 4 && other.x < item.x + item.width + 4;
-				})) item.y += item.height + 4;
+					return Math.abs(other.y - item.y) < (other.height + item.height) / 2 + 4 && item.x < other.x + other.width + 4 && other.x < item.x + item.width + 4;
+				})) item.y += item.height + 5;
 				settled.push(item);
 				Object.assign(item.e.label.style, {
-					left: item.x + "px",
+					left: (item.centerX ? item.x + item.width / 2 : item.x) + "px",
 					top: Math.min(item.maxY, item.y) + "px",
-					transform: item.center ? "translateY(-50%)" : "",
+					transform: item.centerX ? "translate(-50%, -50%)" : (item.center ? "translateY(-50%)" : ""),
 				});
 			});
 		}
 		function applySelection() {
+			function weigh(parts, outside, live) {
+				parts.forEach(function (part) {
+					if (outside && !live) part.dataset.muted = "true"; else delete part.dataset.muted;
+					if (outside && live) part.dataset.secondary = "true"; else delete part.dataset.secondary;
+				});
+			}
 			nodes.forEach(function (n, key) {
 				n.element.setAttribute("aria-pressed", String(selected === key));
-				var muted = !!selected && selected !== key;
-				(n.bases || []).forEach(function (part) { part.dataset.muted = String(muted); });
-				if (n.flow) n.flow.dataset.muted = String(muted);
+				weigh((n.bases || []).concat(n.ports || [], n.flow || [], n.flowGlow || [], n.flowHead || []), selected && selected !== key, isActive(n));
 			});
 			edges.forEach(function (e) {
-				var muted = !!selected && e.message.from !== selected && e.message.to !== selected;
-				[e.path, e.flow, e.arrow, e.label].forEach(function (n) { n.dataset.muted = String(muted); });
+				var from = nodes.get(e.message.from), to = nodes.get(e.message.to);
+				weigh([e.path, e.flow, e.flowGlow, e.flowHead, e.arrow, e.label], selected && selected !== e.message.from && selected !== e.message.to,
+					(from && isActive(from)) || (to && isActive(to)));
 			});
 		}
 		function setSelected(key) { if (destroyed) return; selected = nodes.has(key) ? key : null; applySelection(); }
@@ -498,7 +557,7 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 				/* 涌动只跟成员是否在跑：并发成员哪怕还带着排队/失败的关系线，也照样亮着，
 				 * 否则「几个成员在并行」这件事在图上看不出来。关系线接管路径时只让归属丝带让位。 */
 				var live = isActive(n);
-				(n.bases || []).forEach(function (part) {
+				(n.bases || []).concat(n.ports || []).forEach(function (part) {
 					/* 只有「没在跑」的成员才把丝带让给关系线；在跑的成员两样都保留，
 					 * 否则并发成员的忙态会被排队色盖掉，看起来像没在动。 */
 					part.dataset.hidden = String(blocked.has(key) && !live);
@@ -507,17 +566,23 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 				setFlowActive(n, live);
 			});
 		}
-		/* 相位对齐：新变活跃的线用全局时钟取负 delay，和其他活跃线同一步调。 */
+		/* 相位对齐：新变活跃的线用全局时钟取负 delay，和其他活跃线同一步调；主尾流与柔光/头脉冲同频同相。 */
 		function setFlowActive(n, on) {
-			var flow = n.flow;
-			if (!flow) return;
+			var layers = [n.flow, n.flowGlow, n.flowHead].filter(Boolean);
+			if (!layers.length) return;
 			if (on) {
-				if (flow.dataset.active === "true") return;
-				flow.style.animationDelay = "-" + (now() % FLOW_MS) + "ms";
-				flow.dataset.active = "true";
-			} else if (flow.dataset.active) {
-				delete flow.dataset.active;
-				flow.style.animationDelay = "";
+				var phase = "-" + (now() % FLOW_MS) + "ms";
+				layers.forEach(function (layer) {
+					if (layer.dataset.active === "true") return;
+					layer.style.animationDelay = phase;
+					layer.dataset.active = "true";
+				});
+			} else {
+				layers.forEach(function (layer) {
+					if (!layer.dataset.active) return;
+					delete layer.dataset.active;
+					layer.style.animationDelay = "";
+				});
 			}
 		}
 		function renderEdges() {
@@ -534,14 +599,14 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 				if (!prior || priority(m) > priority(prior) || (priority(m) === priority(prior) && m.at >= prior.at)) relations.set(k, m);
 				if (!durable) nextExpiry = nextExpiry == null ? m.at + RECENT_MS : Math.min(nextExpiry, m.at + RECENT_MS);
 			});
-			edges.forEach(function (e, key) { if (!relations.has(key)) { e.path.remove(); e.flow.remove(); e.arrow.remove(); e.label.remove(); edges.delete(key); } });
+			edges.forEach(function (e, key) { if (!relations.has(key)) { e.path.remove(); e.flow.remove(); e.flowGlow.remove(); e.flowHead.remove(); e.arrow.remove(); e.label.remove(); edges.delete(key); } });
 			relations.forEach(function (m, key) {
 				var peer = m.from !== "@leader" && m.to !== "@leader";
 				var points = route(m.from, m.to, peer ? pairLane(m.from, m.to) : 0); if (!points) return;
 				var e = edges.get(key);
 				if (!e) {
-					e = { path: svg("path", "cg-edge"), flow: svg("path", "cg-flow"), arrow: svg("polygon", "cg-arrow"), label: el("div", "cg-edge-label") };
-					gEdges.appendChild(e.path); gBursts.appendChild(e.flow); gHeads.appendChild(e.arrow); canvas.appendChild(e.label);
+					e = { path: svg("path", "cg-edge"), flowGlow: svg("path", "cg-flow-glow"), flow: svg("path", "cg-flow"), flowHead: svg("path", "cg-flow-head"), arrow: svg("polygon", "cg-arrow"), label: el("div", "cg-edge-label") };
+					gEdges.appendChild(e.path); gBurstGlows.appendChild(e.flowGlow); gBursts.appendChild(e.flow); gBurstHeads.appendChild(e.flowHead); gHeads.appendChild(e.arrow); canvas.appendChild(e.label);
 					edges.set(key, e);
 				}
 				e.message = m; e.points = points;
@@ -555,20 +620,23 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 					labelX = b[0] + bulge * 0.72 + 6;
 					labelY = (a[1] + b[1]) / 2;
 				} else {
-					/* 主 Agent 连线：骑在自己的丝带上，派发与回报上下分开 ±9px。 */
-					var shift = laneShift(m.from === "@leader" ? m.to : m.from) * 1.6 + (m.from === "@leader" ? 9 : -9);
-					a = [points[0][0], points[0][1] + shift * 0.45]; b = points[points.length - 1];
-					d = curveData(a, b, shift);
-					near = cubicAt(a, b, shift, 0.93);
-					var middle = cubicAt(a, b, shift, 0.46);
-					labelX = middle[0] - 34;
-					labelY = middle[1] - 30;
+					/* 主 Agent 连线：单向关系与归属底轨/流光完全同轴；仅当同一成员同时存在往返两条边时做 ±5px 平行分轨。 */
+					var hasReverse = relations.has(m.to + "\u2192" + m.from);
+					var railOffset = hasReverse ? (m.from === "@leader" ? -5 : 5) : 0;
+					a = [points[0][0], points[0][1] + railOffset];
+					b = [points[points.length - 1][0], points[points.length - 1][1] + railOffset];
+					d = curveData(a, b);
+					near = cubicAt(a, b, 0.93);
+					var middle = cubicAt(a, b, 0.5);
+					labelX = middle[0];
+					labelY = middle[1] + (hasReverse ? (m.from === "@leader" ? -16 : 16) : 0);
 				}
-				e.path.setAttribute("d", d); e.flow.setAttribute("d", d);
+				e.path.setAttribute("d", d); e.flow.setAttribute("d", d); e.flowGlow.setAttribute("d", d); e.flowHead.setAttribute("d", d);
+				applyTaper(e.path, a, b);
 				e.arrow.setAttribute("points", arrowMarks(b, near));
 				e.path.dataset.status = m.status; e.arrow.dataset.status = m.status; e.label.dataset.status = m.status;
 				e.label.textContent = KINDS[m.kind] + " · " + (m.status === "FAILED" ? m.kind === "report" ? "失败" : m.reason : DELIVERY[m.status]) + (m.status !== "FAILED" && failures.has(key) ? " · " + failures.get(key) + "失败" : "");
-				e.labelPos = { x: labelX, y: labelY, center: peer };
+				e.labelPos = peer ? { x: labelX, y: labelY, center: true, centerX: false } : { x: labelX, y: labelY, center: true, centerX: true };
 			});
 			placeLabels();
 			applySelection(); syncFlows();
@@ -576,15 +644,16 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 			if (nextExpiry != null && visible && connected) expiry = timeout(function () { expiry = null; renderEdges(); renderStats(); }, Math.max(20, nextExpiry - now() + 20));
 		}
 		function stopBursts() {
-			bursts.forEach(function (entry) { cancelTimeout(entry.timer); delete entry.element.dataset.burst; });
+			bursts.forEach(function (entry) { cancelTimeout(entry.timer); entry.elements.forEach(function (el) { delete el.dataset.burst; }); });
 			bursts.clear();
 		}
 		function burst(m, e) {
 			if (bursts.has(m.id) || bursts.size >= MAX_BURSTS) return;
-			var entry = { element: e.flow, timer: null };
-			entry.timer = timeout(function () { bursts.delete(m.id); delete entry.element.dataset.burst; }, BURST_MS);
+			var els = [e.flow, e.flowGlow, e.flowHead];
+			var entry = { elements: els, timer: null };
+			entry.timer = timeout(function () { bursts.delete(m.id); els.forEach(function (el) { delete el.dataset.burst; }); }, BURST_MS);
 			bursts.set(m.id, entry);
-			e.flow.dataset.burst = "true";
+			els.forEach(function (el) { el.dataset.burst = "true"; });
 		}
 		function communication(raw, animate) {
 			if (destroyed) return;
@@ -613,14 +682,14 @@ button.cg-node:active { background:rgb(255 255 255 / .66); }
 					var teamKey = String(raw.team || "default");
 					hiddenTeams.set(teamKey, (hiddenTeams.get(teamKey) || 0) + 1);
 					var gone = nodes.get(key);
-					if (gone) { gone.element.remove(); if (gone.base) gone.base.remove(); if (gone.flow) gone.flow.remove(); nodes.delete(key); }
+					if (gone) { gone.element.remove(); if (gone.base) gone.base.remove(); if (gone.portStart) gone.portStart.remove(); if (gone.portEnd) gone.portEnd.remove(); if (gone.flow) gone.flow.remove(); if (gone.flowGlow) gone.flowGlow.remove(); if (gone.flowHead) gone.flowHead.remove(); nodes.delete(key); }
 					return;
 				}
 				var n = nodes.get(key);
 				if (!n) { n = makeNode(key, false); nodes.set(key, n); }
 				updateNode(n, raw);
 			});
-			nodes.forEach(function (n, key) { if (!keys.has(key)) { n.element.remove(); if (n.base) n.base.remove(); if (n.flow) n.flow.remove(); nodes.delete(key); } });
+			nodes.forEach(function (n, key) { if (!keys.has(key)) { n.element.remove(); if (n.base) n.base.remove(); if (n.portStart) n.portStart.remove(); if (n.portEnd) n.portEnd.remove(); if (n.flow) n.flow.remove(); if (n.flowGlow) n.flowGlow.remove(); if (n.flowHead) n.flowHead.remove(); nodes.delete(key); } });
 			if (arguments.length > 1) selected = nodes.has(selectedKey) ? selectedKey : null;
 			else if (!nodes.has(selected)) selected = null;
 			empty.hidden = nodes.size > 0 || hiddenCount > 0;

@@ -2,6 +2,12 @@
 
 `agent_team` 是主 Pi 的轻量协作控制面。主 Pi 始终是唯一 Leader；runtime 只持久化事实、传递 settled 结果，并执行成员授权、DAG 依赖、成员忙闲和 owned-path 冲突约束。它不自动选专家、创建任务或派发下一节点。
 
+## 项目维护入口
+
+- 操作团队：按当前阶段查 [操作手册](skills/pi-agent-team/SKILL.md)。
+- 改 Dashboard：看 [PRODUCT.md](PRODUCT.md) 和本机方案 `~/.pi/plans/agent-team-ui-style.md`。改风格先问偏好、给并列候选、再做选定稿；以 `impeccable` 主导，按需从 `uiverse.io` 取组件参考。验收对照运行中服务返回的真实页面和资源；预览读取仓库实物，不复制快照。
+- 改协作图：以 `collaboration-graph.js` 的光带、车道、碰撞与涌动逻辑为准（42 + 198 = 240 px，1450 ms，同钟）；停止成员不绘制，名册仍计数。并行批次与排队原因查 `runtime.ts:runnableBatches`，不要把并行执行误画成多个同时选中的焦点。
+
 ## Planned-only Loop
 
 复杂任务先一次注册完整计划：
@@ -32,7 +38,7 @@ agent_team({
 })
 ```
 
-一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`agent_team` 的每个 action 使用独立的严格参数形状：`run` 只接 `taskId`，`parallel` 只接 `taskIds`，`review` 只接 `reviewRoundId`/`taskIds`，`expert` 只接对应 round、member、taskIds 和 objective；不要把其他 action 字段混入调用。成员可选 `headPrompt`/`tailPrompt` 作为长期提示词，任务可选同名字段作为一次性追加提示词；Runtime 的报告协议始终强制放在最终尾部。新成员省略 `model` 时继承主 Pi；只有用户明确要求覆盖时才填写真实可用目录中的精确 canonical `provider/model`，显式无效值会在任何持久化或 child 副作用前报错，绝不回退主模型。amendment 中既有成员省略 `model` 会保留其当前持久化选择，显式填写才切换。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订在授权面不变时（指令/任务/验收编辑）静默复用已批准授权；一旦放宽 `tools`/`kind`/`model`/`reviewerId`/`ownedPaths`，等同于扩大成员能做什么，会重新弹同一次门。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。启用后只在当前 runtime/session 跳过这些 plan gate；Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
+一次注册同时固定 roster、reviewer、ExecutionTask DAG、具体 cwd 相对 ownership、局部 TaskPacket 和 acceptance。`agent_team` 的每个 action 使用独立的严格参数形状：`run` 只接 `taskId`，`parallel` 只接 `taskIds`，`review` 只接 `reviewRoundId`/`taskIds`，`expert` 只接对应 round、member、taskIds 和 objective；不要把其他 action 字段混入调用。成员可选 `headPrompt`/`tailPrompt` 作为长期提示词，任务可选同名字段作为一次性追加提示词；Runtime 的报告协议始终强制放在最终尾部。新成员省略 `model` 时继承主 Pi；只有用户明确要求覆盖时才填写真实可用目录中的精确 canonical `provider/model`，显式无效值会在任何持久化或 child 副作用前报错，绝不回退主模型。amendment 中既有成员省略 `model` 会保留其当前持久化选择，显式填写才切换。`set-auto` 默认关闭；关闭时 initial plan 与名册增长（新增成员）使用同一有界 TUI/RPC USER_GATE，同名册修订在授权面不变时（指令/任务/验收编辑）静默复用已批准授权；一旦放宽 `tools`/`kind`/`model`/`reviewerId`/`ownedPaths`，等同于扩大成员能做什么，会重新弹同一次门。拒绝、取消或中止不会分配 UUID、追加 TeamState、创建文件、启动 Dashboard 或 child；TUI 门倒计时结束且用户未操作时视为同意（RPC 原生对话框仍遵循 Pi 自身超时语义）。开关持久化；启用后跳过这些 plan gate，Leader 仍须显式派工，Reviewer verdict 和最终 `HUMAN_ACCEPT` 均不会自动填写。
 
 TUI 中该确认使用有界审阅视窗：`Approve` / `Reject` 固定可见，`↑` / `↓` / `PageUp` / `PageDown` 滚动正文，`←` / `→` 或 `Tab` 切换选项，`Enter` 确认当前选中项，`Esc` / `Ctrl+C` 始终拒绝，倒计时归零未操作则默认 Approve；正文为标准 Markdown（节标题/列表/加粗），TUI 端解析为主题色样式，IDE/RPC 端可直接渲染 MD，溢出时右缘显示滚动条。终端缩放后正文会重新换行并夹紧滚动位置。RPC 继续使用 Pi 原生 confirmation 协议。
 
@@ -44,7 +50,7 @@ agent_team({ action: "plan", team: "default", expectedRevision: 1, plan: nextPla
 
 提交前可先 `validateOnly: true` 预检同一份草稿：跑全部语义校验（revision、DAG、owned paths、amendment 约束），但不触发 USER_GATE、不消耗 revision、不落盘。amendment 的确认门只显示增量 diff（新增/变更成员与任务、acceptance 增删、reviewer 变更高亮）；初始注册仍显示完整计划。
 
-名册只增不减：新增成员前先判断既有成员的 `kind`、角色书与权限边界能否覆盖新工作——能覆盖就把任务派给既有成员，只有专业方向、边界或独立性确实不匹配时才新增。计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证，并在 auto 关闭时重新确认；已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
+名册只增不减：新增成员前先判断既有成员的 `kind`、角色书与权限边界能否覆盖新工作——能覆盖就把任务派给既有成员，只有专业方向、边界或独立性确实不匹配时才新增。计划不允许静默删除既有成员/任务；仍持有 ownership 的未完成任务不能改定义。新增成员、任务或变更成员配置、ownership、acceptance 都必须经过同一 plan revision 验证；在 auto 关闭时，只有新增成员或扩大授权才重新弹门。已释放锁的任务定义变更会回到待执行状态并保留 attempt 计数。模型/思考切换共用既有 `set-model`/Dashboard 后端通道。
 
 ## 手动推进
 
@@ -74,7 +80,7 @@ agent_team({ action: "cancel", taskIds: ["dropped"] })
 - ownedPaths 是授权声明而不是沙箱：成员以同一账号运行、自带 bash，越界写在模型层拦不住。因此每轮结束会用 `git status` 前后差异做一次只读审计，把 ownedPaths 之外的改动记成「Workspace warning」带回 Leader（只告警、不回滚、不阻断）；非 git 工作区不检测，这一点是已知边界。
 - 路径相等或存在父子前缀即冲突；从 `RUNNING` 到 `VERIFIED/CANCELED` 持锁；
 - `cancel {taskIds}` 显式放弃 PENDING/READY/BLOCKED/REPORT_INVALID 任务并释放路径锁，依赖它的 PENDING/READY 任务级联取消（在途的 BLOCKED 修复与 SUBMITTED/FIX_REQUIRED review 循环不级联，由 Leader 单独决定）；
-- ReviewRound 只接收 `SUBMITTED`；optimizer 只附着 `VERIFIED`；专家不取写锁。
+- ReviewRound 只接收 `SUBMITTED`；optimizer 只附着 `VERIFIED`；专家不取写锁。审查派发包按 taskId 列出每个目标的 `**Acceptance**` 与非空 `**Constraints**`（字段名与看板浮层一致），Reviewer 不需要发一条消息来索要验收标准。
 
 所有新派工都要求已注册 plan。旧 TeamState/成员/Session 仍可通过 `status`、`wait`、`stop`、`kill`、`set-model` 和恢复路径读取使用，但 inline `member + task`、inline `tasks[]` 以及无计划 `run/parallel` 会明确拒绝；runtime 不删除或覆盖旧 workspace 与 Session。
 
@@ -94,7 +100,25 @@ agent_team({ action: "cancel", taskIds: ["dropped"] })
 
 派发提示词的第一段是全队授权地图：runtime.ts:2156 的 `scopeMapSegment` 把成员、任务与 plan 交给 session-roster.ts:95 的 `scopeMapBlock`，一次回答三件事——谁是队友（除自己与 STOPPED 外的成员各一行 `id — kind · role`，kind 取自 plan.memberKinds，runtime.ts:2162）、各自能写到哪里（`owns:` 为该成员全部任务 ownedPaths 的并集）、谁终裁（`- reviewer:` 行取 plan.reviewerId，runtime.ts:2167）。块末固定一行「联系与同伴消息不授予写入权，也不改变这张图。」（session-roster.ts:39），把「能联系」与「能写」在同一个块里切开。地图每轮重发，没有缓存前缀资格；名册文本只在 `scopeMapBlock` 里生成，runtime 不留第二份（dispatch-prompt.test.ts:293），而 `stop`/`kill` 的人类可读清单仍是旧的 `formatRoster`（runtime.ts:4583、4628），两套数据源不合并。
 
-consult 是「Leader 需要一个判断，但不需要一轮评审」的通道：向任意已规划、空闲成员提一个只读问题，复用 expert 的只读派发构造（runtime.ts:2392）与信封（runtime.ts:2416），所以轮次 id 字段仍叫 `expertRoundId`；不绑 taskIds、不改任何 ExecutionTask 状态（runtime.ts:2480），未给轮次 id 时生成 `consult-N`（runtime.ts:2515）。只读限定只到契约与状态层：consult is read-only by contract and state, not at the tool layer: the consulted member keeps its own write tools.（index.ts:171；工具描述里是同一限定的短句，index.ts:160）
+consult 是「Leader 需要一个判断，但不需要一轮评审」的通道：向任意已规划、空闲成员提一个只读问题，复用 expert 的只读派发构造（runtime.ts:2392）与信封（runtime.ts:2416），所以轮次 id 字段仍叫 `expertRoundId`；不绑 taskIds、不改任何 ExecutionTask 状态（runtime.ts:2480），未给轮次 id 时生成 `consult-N`（runtime.ts:2515）。只读限定只到契约与状态层：consult is read-only by contract and state, not at the tool layer: the consulted member keeps its own write tools.（见 `index.ts:AGENT_TEAM_DESCRIPTION` 与操作手册）
+
+## 按需加载与 `/team` 指令
+
+`agent_team` 以 `exposure: "deferred"` 注册：注册本身不声明工具，新会话只自动激活内置 `tool_search`；模型检索到 `agent_team` 后，Pi 在下一轮声明它。分支恢复出既有 TeamState 时，`session_start` 直接把它加入 active tools，省掉一次检索；同一会话用 `/tree` 切到含有效 TeamState 的分支时，`session_tree` 重新从所选分支恢复状态并补声明 `agent_team`，无 TeamState 的旧分支也会补回 `tool_search`，随后的 `status` 不再读上一个分支。有运行中成员或未 flush 的报告时 `/tree` 会被明确阻止；允许切换时会停掉旧分支的空闲 child、清空未消费的后台结果，旧分支的迟到回报不会写入或通知新分支。成员 child 在扩展入口早退，不注册工具也不激活 `tool_search`。工具指引只点名 `pi-agent-team` 技能，不写本机安装绝对路径，换机器不会污染稳定段。
+
+`/team` 是统一入口，省略子命令时等价于 `status`，第一至第三参数有 Tab 补全（子命令；已注册 teamId；status/stop 的 memberId；auto 的 on/off）：
+
+| 指令 | 作用 |
+| --- | --- |
+| `/team` · `/team status [team] [member]` | 查看成员、任务与 child session |
+| `/team open [team]` | 只读打开或唤回 Dashboard：只同步名册快照，不启动 child、不改任务、不重发 prompt |
+| `/team stop [team] [member]` | 软停止成员（省略 member 停全队） |
+| `/team auto on\|off` | 持久化自动授权开关；省略参数只显示当前会话实际用于 USER_GATE 的值 |
+| `/team close [team]` | 人工验收后收尾 |
+| `/team doctor` | 无模型核对 Pi RPC 与精确恢复 |
+| `/team activate` | 手动把 `agent_team` 加入当前会话的声明工具 |
+
+`/team-status` 与 `/team-doctor` 保留为薄封装，参数与行为不变；子命令实现只有 `index.ts:runTeamSubcommand` 一份。
 
 ## 控制面与健康告警
 
@@ -103,8 +127,7 @@ consult 是「Leader 需要一个判断，但不需要一轮评审」的通道�
 - `steer {member, message}`：对**正在运行**成员注入一条受控短消息（Pi 公开 steer RPC）。不创建任务、不改 owned paths、不触发任何自动 dispatch；client 没有公开 steer 能力时显式拒绝，不伪造冻结 RPC；空闲或不存在成员直接报错。
 - `pause {taskId}`：执行期软中断（与前台 Esc/`stop` 同一 abort 语义）。child client、Session UUID、授权与 Dashboard 全部保留；成员收尾为 `INTERRUPTED`，任务进入 `BLOCKED` 且标注「不重放」。
 - `resume {taskId | reviewRoundId | expertRoundId}`：Leader 显式重新派发**同一目标**的下一 attempt，三者只能给一个。执行任务复用 `run` 的全部 preflight（依赖、owned-path 锁、成员可用性与非法状态拒绝）；审查/专家轮次只接受 `BLOCKED`，复用原 reviewer/expert 与原 targetTaskIds（专家还复用原 objective），复核目标仍可审查后重新锁为 `AUDITING`。绝不新建轮次、越权验证或重放已接受的提示。
-- `answer-request {requestId, answer}` / `resolve-request {requestId}`：推进成员随报告提交的请求生命周期。请求由成员回报产生 `OPEN`；`answer-request` 只接受 `OPEN`，记录答案后进入 `ANSWERED`，并在**发起成员自身**下一次显式 dispatch 时注入（即使 review/expert 使用了新的 roundId，注入后仍消费为 `RESOLVED`）；`resolve-request` 显式关闭 `OPEN/ANSWERED`，已 `RESOLVED` 拒绝重复操作。旧快照恢复时丢失状态的请求一律回 `OPEN`，绝不凭空判定已答复。
-- 受控消息：成员报告可按 `messages: [{to, text}]` 向**同一已注册计划内**的目标成员发送一次性受控消息，单条 ≤ 1000 字符、每报告 ≤ 5 条、每接收者未送达队列 ≤ 20 条、全局 ≤ 100 条。消息在接收者下一次显式 dispatch 的 prompt 中一次性注入，prompt 被接受才标记 `deliveredAt`；未接受原样保留待下一位 Leader 显式 dispatch，不自动重放；超限与计划外目标被拒绝并保留来源报告供核对。
+- `answer-request {requestId, answer}` / `resolve-request {requestId}`：推进成员随报告提交的请求生命周期。请求由成员回报或成员上行产生 `OPEN`；`answer-request` 只接受 `OPEN`，记录答案后进入 `ANSWERED`，并在**发起成员自身**下一次显式 dispatch 时注入（即使 review/expert 使用了新的 roundId，注入后仍消费为 `RESOLVED`）；`resolve-request` 显式关闭 `OPEN/ANSWERED`，已 `RESOLVED` 拒绝重复操作。旧快照恢复时丢失状态的请求一律回 `OPEN`，绝不凭空判定已答复。
 - 健康快照：每次成员最终化一次性持久化三层模型证据（配置模型 / child RPC 报告模型 / 首条真实 assistant 回复模型）、最后事件与工具、本轮用量与 Context 占用。固定阈值（连续工具错误、重复同一工具次数、auto-retry 次数）只评估 `NORMAL → ELEVATED → DEGRADED → CRITICAL` 等级并留下原因，在同一成员的历史快照间只升不降、**只告警**——绝不自动 steer/stop/kill，也不触发派发。流式事件不逐条追加 TeamState 快照。
 
 ## 结构化 settled 报告
@@ -129,20 +152,22 @@ Expert：
 {"agent_team_report":{"type":"expert","expertRoundId":"opt-1","summary":"无低风险候选","evidence":[],"requests":[]}}
 ```
 
-字段、条数和长度有上限。缺失、损坏、越界、类型/ID 不匹配时进入 `REPORT_INVALID`；execution ownership 不释放，不自动重试。正文保留在 child Session，超过 50KB 才写 `members/<id>/output.md`。`evidence` 数组元素只写纯中文路径/行号描述，必须用 `path:line` 冒号格式（如 `src/a.ts:42`，正斜杠），禁止散文式「第 N 行」、反斜杠、代码片段与示例照抄；envelope 必须是最后一个非空行、裸单行 JSON，禁止代码围栏。
+字段、条数和长度有上限。`summary` 只写一句判定式结论（做了什么、结果数字），不复述正文；正文仍写给人看。缺失、损坏、越界、类型/ID 不匹配时进入 `REPORT_INVALID`；execution ownership 不释放，不自动重试。正文保留在 child Session，超过 50KB 才写 `members/<id>/output.md`。`evidence` 数组元素只写纯中文路径/行号描述，必须用 `path:line` 冒号格式（如 `src/a.ts:42`，正斜杠），禁止散文式「第 N 行」、反斜杠、代码片段与示例照抄；envelope 必须是最后一个非空行、裸单行 JSON，禁止代码围栏。
 
 Coder 只能令任务进入 `SUBMITTED/BLOCKED/REPORT_INVALID`。只有计划指定 Reviewer 的合法 ReviewRound 能写 `VERIFIED/FIX_REQUIRED`。`FIX_REQUIRED` 保存原 `fix_prompt`，下一次 `run(taskId)` 是同一 ExecutionTask 的新 attempt；不创建修复任务，不做 plan amendment。只有 `VERIFIED/CANCELED` 释放 ownership，`VERIFIED` 会使依赖节点转为 `READY`。
 
 ## 成员互通
 
-成员之间可以直接短消息沟通（各自受控 child 内的 `team_message` 工具）。互通只传递信息，永远不产生工作。
+两条线，不交叉：**成员 ↔ 成员、成员 → Leader 统一用 `team_message`；Leader → 成员用 `steer` / `consult` / `answer-request`**。报告信封只交 `requests`，不再写留言。互通只传递信息，永远不产生工作。
 
 - **通道**：runtime 懒启动一个只监听 `127.0.0.1` 随机端口的小型入口（Node 标准库，不依赖 Dashboard、浏览器或 UI 模式），每个 child 单独签发临时令牌；令牌、端口只经环境变量注入，不写进 TeamState、提示词或工具结果。child 除下方「成员能力」放行的白名单外，只额外加载 `member-communication.ts` 这一个互通扩展，`--no-extensions` 继续隔离用户与项目扩展。
 - **路由**：接收者正在执行任务 → 用 Pi 公开 `steer` 在当前回合安全点注入；接收者 `APPROVED/IDLE` 且无人工暂停 → 启动一轮只读回答（复用同一 Session、模型与思考程度）；其余（`STARTING`/`INTERRUPTED`/`STOPPED`/`ERROR`、人工暂停、并发满额）→ 留在待投递队列，由接收者下一次显式派发注入。接口未接受则保持待投递并记录原因，不自动重放。
 - **一问一答**：一个新问题最多触发一次空闲自动回答；回答不再唤醒空闲提问者（只进其收件箱/下一次派发）。工作中的成员仍可继续追问。
+- **成员 → Leader 上行**：`team_message {action:"send", to:"leader"}`（`@leader` 与任意大小写都归一为 `leader`）。消息登记为一条 `OPEN` 的 `kind=question` 请求，来源绑定发送者当前运行目标（没有在跑的目标则直接拒绝，不凭空建请求），并与同伴消息共用同一 attempt 的 5 条上限。runtime 同时发一条看板连线（成员 → `@leader`/`question`/`DELIVERED`）和一条主会话通知：含 team/成员、`requestId`、过 `guardNote` 防伪的正文，并提示 Leader 可用 `steer` 实时回复运行中的成员、或用 `answer-request` 留存答复（随该成员下一次显式派发注入）。`leader` 是保留收件人，计划不允许成员取这个名字（大小写不敏感）。
 - **只读回答回合**：该回合由派发提示中的通信标记判定，只放行 `read/grep/find/ls/ffgrep/fffind/glob`；`bash`/`edit`/`write`/`team_message` 与任何未知工具都在 `tool_call` 处硬拦截（只靠提示词禁止写入不算通过）。该回合不产生任何报告信封，不写 `members/<id>/output.md`，不改任务状态、attempt、ownership 与审核结论，也不进入 `wait` 结果。
 - **上限**：单条 ≤ 1000 字符；同一 attempt 最多 5 条；每接收者未送达队列 ≤ 20、团队消息记录 ≤ 100；自动回答最多 3 个模型回合、总时限 120 秒，超限中断并记录，不追加回答、不自动重试；回答正文上限 2000 字符。
-- **失败与恢复**：回答失败记 `FAILED` + 原因，并向 Leader 发一条简短通知（只告警，不自动重试或调度）；`stop/kill` 与网页停止同样能停止通信回合，且不会伪造任务 `BLOCKED`。父会话恢复或分支切换会作废旧令牌且不自动唤醒成员；`shutdown` 关闭入口并释放端口。旧快照（无互通字段）照常读取，报告里的 `messages` 仍沿用「下一次显式派发读取」的旧语义。
+- **失败与恢复**：回答失败记 `FAILED` + 原因，并向 Leader 发一条简短通知（只告警，不自动重试或调度）；`stop/kill` 与网页停止同样能停止通信回合，且不会伪造任务 `BLOCKED`。父会话恢复或分支切换会作废旧令牌且不自动唤醒成员，正在进行的回答回合按分支代际退役：不写新分支的成员状态与越界告警、不删同名控制记录、不落盘也不发通知；`shutdown` 关闭入口并释放端口。
+- **旧快照**：`TeamRecord.memberMessages` 里的历史报告留言（无 `fromPeer`、有 `fromType/fromId`）继续可读，仍按「接收者下一次显式派发注入一次」的语义投递，但已经没有新的写入路径（报告信封不再接受 `messages`）。
 - **可见性**：`status` 增加 `Comms:` 计数、正在回答的成员与失败摘要；完整消息体只在 `status full:true` 或成员自己的 `team_message action=inbox` 中出现。
 
 ## 成员能力
@@ -181,7 +206,7 @@ Workspace 只维护：
 
 ## Session、Dashboard 与压缩
 
-既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`，但只允许成员空闲时调用；非 `set-auto` 会话里，由 Leader 发起的换模型会先要一次确认（网页上的切换本身是用户操作，不重复问）；`STARTING/RUNNING`（包括 Dashboard 请求）会明确拒绝并要求先 `stop`。空闲 live child 依次应用并核对 model/thinking，任一步失败都回滚且不改持久配置；无 live child 时先持久化，到下次 run 启动核对。每轮首个真实 assistant `message_end` 的 `provider/model` 还必须与目标完全匹配；缺失或不同会停止不可信 child，让任务进入可恢复失败路径，且不自动重放。Dashboard 仍绑定 loopback（随机端口 + 不可猜路径令牌 + 同源 POST）且不启动服务端调度。可写控制只有三类：两个选择器加一个应用按钮提交成员模型与思考程度（运行中禁用，需先停止）；每成员「停止／继续」；以及 `/control` 用来提交 `stop|resume`。停止是软中断（目标进入 `BLOCKED`，child 与 Session 保留）；继续只对「由网页手动停止且目标仍 `BLOCKED`」的同一任务/轮次开新 attempt，服务端按真实 RunTarget 二次校验，同一成员的请求串行化，绝不新建轮次、不重放提示、不跨成员误触发。成功停／续在落盘后向 Leader 发一条标注「用户手动操作：不要自动调度／重试／重复派发」的简短通知。进度事件（`thinking_start`、`tool_execution_start/end`、压缩与重试阶段，白名单字段，只含阶段名与工具名，**绝不含工具参数、部分结果与思考正文**）只用于无输出时的当前阶段占位；刷新或 SSE 重连由服务端镜像恢复。plan 注册在持久化成功后只在 UI 模式（TUI 或带 UI 的 RPC）以只读方式同步显示完整名册、不启动任何模型；validateOnly、被拒绝/校验失败与无 UI 模式不打开页面。实际派工才沿用原准备流程。**协作图为默认视图**：浅色原生分层图，左侧主 Agent、右侧按团队稳定排列的成员，图内滚动；`collaboration-graph.js` 经唯一固定白名单路径以 nonce 经典脚本加载，无图形框架依赖。顶部可切回「工作面板」。点击成员展开原详情（任务、完整回复、上下文、用量/费用、耗时、模型/思考程度、模型切换、停止/继续）；关闭或 Esc 收起并恢复全图，窄屏为覆盖式详情。输出面板只在换人、文本变化且没有进行中的选中时重建，事件密集时渲染合并到每帧一次（所以流式输出期间仍能选中复制）；完整回复按编辑式层级排版：标题分级并带暖橙短条、行内重点用暖橙荧光底、行内代码为等宽芯片、引用带主色竖条、代码块为下沉的浅色凹面并在右上角标注语言；标题与重点之外不加底色，主 Agent 仍是页面上唯一的实心深色面。节点显示真实状态和当前阶段；STOPPED 席位默认不画在图上（已终止、不可继续执行），图例右侧显示「已隐藏 N 位已停止成员」，成员计数仍按名册口径；重新派发进入 STARTING/RUNNING 后自动回到图上。成员卡左侧竖条按状态着色，主 Agent 是页面上唯一实心深色面并显示成员/进行中/排队三个计数；主 Agent 状态独立来自主会话，未知不冒充空闲。同伴正文一律按引用块注入（逐行 `> `、剥离控制字符并中和通信回合标记），对方原话只能作为被引用的信息出现，不会被当成本轮的指令；同伴只读回答另有通信阶段，不清空任务/输出，网页可停止回答但不创建可继续的工作目标。主 Agent 卡右缘按成员顺序均分锚点：每名成员各有自己的交点，并行成员因此是几条并排的弧线，而不是汇到一个点再散开。归属线是曲线丝带：三次贝塞尔替掉直角，宽度从源头 2.8px 收到末端 1px，只表示归属、不带箭头。主 Agent 到各成员共用一条主干并按成员分车道（最多 5 条，活跃成员优先占互不相同的车道），成员处于启动/运行/工具/重试或只读回答时，该丝带加亮并沿箭头方向涌动——涌动按固定空间周期（dasharray 42+198px）与统一时长驱动，相位由脚本写入的负 animation-delay 对齐到同一时钟，因此并行中的几名成员步调一致、主干上的亮带严格对齐，分岔后才各自散开；纯 CSS、不走逐帧循环，空闲时整图静止。派发/引导/回报/提问/回答/留言只显示类型与状态，不显示通信正文或 child 凭据；同伴之间按方向各占一条弧（提问与回答、两个方向不会合并成一条），同一对关系用按对固定的车道，箭头按曲线切线绘制，标签按竖直带自动避让、不压住成员卡。一次投递仅在真实接受/投递/提交后叠三波更亮的脉冲，不证明模型已阅读或任务 VERIFIED；排队虚线与失败静态保留且不涌动，近期成功关系约 30 秒后淡出；运行中的成员优先获得图焦点，空闲后回到手选成员，聚焦会突出其收发关系。并行脉冲最多 8 条、通信展示缓存最多 200 条；隐藏、断连、工作面板或减少动画时停止并清理，不补播历史。刷新/SSE 重连恢复服务端有界镜像，未开工耗时显示「尚未开始」，未知上下文字段不伪造。
+既有行为保持：固定成员复用 Session UUID；后台 completion、`stop/kill`、`set-model`、idle client cleanup 可用。`set-model` 接受可选 `thinking`，但只允许成员空闲时调用；非 `set-auto` 会话里，由 Leader 发起的换模型会先要一次确认（网页上的切换本身是用户操作，不重复问）；`STARTING/RUNNING`（包括 Dashboard 请求）会明确拒绝并要求先 `stop`。空闲 live child 依次应用并核对 model/thinking，任一步失败都回滚且不改持久配置；无 live child 时先持久化，到下次 run 启动核对。每轮首个真实 assistant `message_end` 的 `provider/model` 还必须与目标完全匹配；缺失或不同会停止不可信 child，让任务进入可恢复失败路径，且不自动重放。Dashboard 仍绑定 loopback（随机端口 + 不可猜路径令牌 + 同源 POST）且不启动服务端调度。可写控制只有三类：两个选择器加一个应用按钮提交成员模型与思考程度（运行中禁用，需先停止）；每成员「停止／继续」；以及 `/control` 用来提交 `stop|resume`。停止是软中断（目标进入 `BLOCKED`，child 与 Session 保留）；继续只对「由网页手动停止且目标仍 `BLOCKED`」的同一任务/轮次开新 attempt，服务端按真实 RunTarget 二次校验，同一成员的请求串行化，绝不新建轮次、不重放提示、不跨成员误触发。成功停／续在落盘后向 Leader 发一条标注「用户手动操作：不要自动调度／重试／重复派发」的简短通知。进度事件（`thinking_start`、`tool_execution_start/end`、压缩与重试阶段，白名单字段，只含阶段名与工具名，**绝不含工具参数、部分结果与思考正文**）只用于无输出时的当前阶段占位；刷新或 SSE 重连由服务端镜像恢复。plan 注册在持久化成功后只在 UI 模式（TUI 或带 UI 的 RPC）以只读方式同步显示完整名册、不启动任何模型；validateOnly、被拒绝/校验失败与无 UI 模式不打开页面。实际派工才沿用原准备流程。**协作图为默认视图**：浅色原生分层图，左侧主 Agent、右侧按团队稳定排列的成员，图内滚动；`collaboration-graph.js` 经唯一固定白名单路径以 nonce 经典脚本加载，无图形框架依赖。顶部可切回「工作面板」。点击成员展开原详情（任务、完整回复、上下文、用量/费用、耗时、模型/思考程度、模型切换、停止/继续）；关闭或 Esc 收起并恢复全图，窄屏为覆盖式详情。输出面板只在换人、文本变化且没有进行中的选中时重建，事件密集时渲染合并到每帧一次（所以流式输出期间仍能选中复制）；完整回复按编辑式层级排版：标题分级并带暖橙短条、行内重点用暖橙荧光底、行内代码为等宽芯片、引用带主色竖条、代码块为下沉的浅色凹面并在右上角标注语言；标题与重点之外不加底色，主 Agent 仍是页面上唯一的实心深色面。节点显示真实状态和当前阶段；STOPPED 席位默认不画在图上（已终止、不可继续执行），图例右侧显示「已隐藏 N 位已停止成员」，成员计数仍按名册口径；重新派发进入 STARTING/RUNNING 后自动回到图上。成员卡左侧竖条按状态着色，主 Agent 是页面上唯一实心深色面并显示成员/进行中/排队三个计数；主 Agent 状态独立来自主会话，未知不冒充空闲。同伴正文一律按引用块注入（逐行 `> `、剥离控制字符并中和通信回合标记），对方原话只能作为被引用的信息出现，不会被当成本轮的指令；同伴只读回答另有通信阶段，不清空任务/输出，网页可停止回答但不创建可继续的工作目标。主 Agent 卡右缘按成员顺序均分锚点：每名成员各有自己的交点，并行成员因此是几条并排的弧线，而不是汇到一个点再散开。归属光带是同轴 4px 半透明带：三次贝塞尔替掉直角，两端按各自走向做遮罩渐隐（每端收 28%），线在卡边不会一刀截断，只表示归属、不带箭头。主 Agent 到各成员共用一条主干并按成员分车道（最多 5 条，活跃成员优先占互不相同的车道），成员处于启动/运行/工具/重试或只读回答时，该光带加亮，脉冲沿主 Agent → 成员方向涌动——涌动按固定空间周期（dasharray 42+198px）与统一时长驱动，相位由脚本写入的负 animation-delay 对齐到同一时钟，因此并行中的几名成员步调一致、主干上的亮带严格对齐，分岔后才各自散开；纯 CSS、不走逐帧循环，空闲时整图静止。派发/引导/回报/提问/回答/留言只显示类型与状态，不显示通信正文或 child 凭据；同伴之间按方向各占一条弧（提问与回答、两个方向不会合并成一条），同一对关系用按对固定的车道，关系线按状态着色、不画箭头（方向由脉冲本身表达，箭头元素保留只为承载状态色），标签是无框小字压在一道径向软晕上、按竖直带自动避让、不压住成员卡。一次投递仅在真实接受/投递/提交后叠三波更亮的脉冲，不证明模型已阅读或任务 VERIFIED；排队虚线与失败静态保留且不涌动，近期成功关系约 30 秒后淡出；图焦点只跟随已在详情面板中打开的成员，面板关闭时整图无焦点，运行状态不会抢占手选焦点，当前查看的成员被移出时直接关闭详情而不是跳到运行中的成员，聚焦只突出其收发关系。并行脉冲最多 8 条、通信展示缓存最多 200 条；隐藏、断连、工作面板或减少动画时停止并清理，不补播历史。刷新/SSE 重连恢复服务端有界镜像，未开工耗时显示「尚未开始」，未知上下文字段不伪造。
 
 成员启动时调用 `setAutoCompaction(true)` 启用 Pi 原生 auto-compaction。orchestrator 不设自定义阈值，不在 settled 后主动调用 compact，也不写压缩交接文件。原生压缩或成员会话失败表现为既有 `ERROR/INTERRUPTED` 状态，不自动重放；由 Leader依据 TeamState 和成员输出决定是否轮换接续。
 
